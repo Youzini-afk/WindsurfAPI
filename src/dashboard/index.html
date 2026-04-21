@@ -2453,6 +2453,22 @@ const App = {
     const tierLabel = { pro: 'PRO', free: 'FREE', expired: '已过期', unknown: '未知' };
     tbody.innerHTML = (d.accounts || []).map(a => {
       const tier = a.tier || 'unknown';
+      const modelRateLimits = a.modelRateLimits || {};
+      const modelCooldownEntries = Object.entries(modelRateLimits)
+        .filter(([, until]) => Number(until) > Date.now())
+        .sort((aEntry, bEntry) => Number(aEntry[1]) - Number(bEntry[1]));
+      const hasModelCooldown = modelCooldownEntries.length > 0;
+      const modelCooldownTooltip = modelCooldownEntries.map(([modelKey, until]) => {
+        const remaining = Math.max(1, Math.ceil((Number(until) - Date.now()) / 1000));
+        return `${modelKey}: ${this.fmtDuration(remaining)} · 至 ${new Date(Number(until)).toLocaleString()}`;
+      }).join('\n');
+      const modelCooldownSummary = hasModelCooldown
+        ? modelCooldownEntries.slice(0, 2).map(([modelKey, until]) => {
+          const remaining = Math.max(1, Math.ceil((Number(until) - Date.now()) / 1000));
+          const shortModel = modelKey.length > 18 ? `${modelKey.slice(0, 18)}…` : modelKey;
+          return `${shortModel} ${this.fmtDuration(remaining)}`;
+        }).join(' · ')
+        : '';
       // GetUserStatus snapshot — authoritative plan/trial/credit info (may be null)
       const us = a.userStatus || null;
       const usTipLines = [];
@@ -2496,6 +2512,12 @@ const App = {
            </button>`
         : `<span class="text-xs text-dim">-</span>`;
       const rateLimitBadge = a.rateLimited ? ` <span class="badge warn">限流中</span>` : '';
+      const modelCooldownBadge = hasModelCooldown
+        ? ` <span class="badge info" title="${this.esc(modelCooldownTooltip)}">模型冷却 ${modelCooldownEntries.length}</span>`
+        : '';
+      const statusSubline = hasModelCooldown
+        ? `<div class="text-xs text-dim" style="margin-top:4px;max-width:220px" title="${this.esc(modelCooldownTooltip)}">${this.esc(modelCooldownSummary)}${modelCooldownEntries.length > 2 ? ` 等 ${modelCooldownEntries.length} 项` : ''}</div>`
+        : '';
       const rpmUsed = a.rpmUsed ?? 0;
       const rpmLimit = a.rpmLimit ?? 0;
       const rpmPct = rpmLimit > 0 ? Math.min(100, Math.round((rpmUsed / rpmLimit) * 100)) : 0;
@@ -2560,7 +2582,7 @@ const App = {
         <td>${rpmCell}</td>
         <td>${creditCell}</td>
         <td>${capsHtml}</td>
-        <td><span class="badge ${a.status}">${a.status}</span>${rateLimitBadge}</td>
+        <td><span class="badge ${a.status}">${a.status}</span>${rateLimitBadge}${modelCooldownBadge}${statusSubline}</td>
         <td style="color:${a.errorCount > 0 ? 'var(--error)' : 'inherit'}">${a.errorCount}</td>
         <td class="text-sm nowrap">${a.lastUsed ? new Date(a.lastUsed).toLocaleString() : '-'}</td>
         <td class="nowrap">
@@ -3639,6 +3661,7 @@ const App = {
     const d = await this.api('GET', '/accounts');
     const accounts = d.accounts || [];
     const errored = accounts.filter(a => a.status === 'error' || a.errorCount > 0);
+    const modelCooling = accounts.filter(a => Object.values(a.modelRateLimits || {}).some(until => Number(until) > Date.now()));
     document.getElementById('ban-cards').innerHTML = `
       <div class="card ${errored.length > 0 ? 'error' : 'success'}">
         <div class="card-header"><div class="card-title">异常账号</div></div>
@@ -3655,15 +3678,30 @@ const App = {
         <div class="card-value">${accounts.filter(a => a.rateLimited).length}</div>
         <div class="card-sub">暂时不参与调度</div>
       </div>
+      <div class="card info">
+        <div class="card-header"><div class="card-title">模型冷却中</div></div>
+        <div class="card-value">${modelCooling.length}</div>
+        <div class="card-sub">按模型暂时跳过轮询</div>
+      </div>
     `;
     const tbody = document.querySelector('#ban-table tbody');
     tbody.innerHTML = accounts.map(a => {
       const flagged = a.status === 'error' || a.errorCount > 0;
+      const modelRateLimits = Object.entries(a.modelRateLimits || {})
+        .filter(([, until]) => Number(until) > Date.now())
+        .sort((aEntry, bEntry) => Number(aEntry[1]) - Number(bEntry[1]));
+      const cooldownText = modelRateLimits.length
+        ? modelRateLimits.map(([modelKey, until]) => {
+          const remaining = Math.max(1, Math.ceil((Number(until) - Date.now()) / 1000));
+          return `${modelKey} · ${this.fmtDuration(remaining)}`;
+        }).join('<br>')
+        : '<span class="text-dim">-</span>';
       return `<tr style="${flagged ? 'background:rgba(239,68,68,.03)' : ''}">
         <td>${this.esc(a.email)} <code class="text-xs">${a.id}</code></td>
         <td><span class="badge ${a.status}">${a.status}</span></td>
         <td style="color:${a.errorCount > 0 ? 'var(--error)' : 'inherit'}">${a.errorCount}</td>
         <td class="text-sm">${a.lastUsed ? new Date(a.lastUsed).toLocaleString() : '-'}</td>
+        <td class="text-sm">${cooldownText}</td>
         <td class="nowrap">
           <div class="btn-group">
             ${a.status === 'error' ? `<button class="btn btn-success btn-xs" onclick="App.toggleAccount('${this.escJsAttr(a.id)}','active');setTimeout(()=>App.loadBans(),500)">重新启用</button>` : ''}
@@ -3671,7 +3709,7 @@ const App = {
           </div>
         </td>
       </tr>`;
-    }).join('') || '<tr class="empty-row"><td colspan="5">暂无账号</td></tr>';
+    }).join('') || '<tr class="empty-row"><td colspan="6">暂无账号</td></tr>';
 
     this.poll('bans', () => this.loadBans(), 30000);
   },
