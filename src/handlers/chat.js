@@ -33,18 +33,26 @@ const QUEUE_MAX_WAIT_MS = 30_000;
 function parseRateLimitResetMs(message = '') {
   const text = String(message || '');
   if (!text) return 0;
-  const match = text.match(/resets?\s+in\s*:\s*([^\]\n\r]+)/i);
+  const match = text.match(/resets?\s+in\s*:?\s*([^\]\n\r]+)/i);
   if (!match) return 0;
   const raw = match[1].trim().toLowerCase();
+  const colonMatch = raw.match(/^(?:(\d+):)?(\d+):(\d+)$/);
+  if (colonMatch) {
+    const hours = parseInt(colonMatch[1] || '0', 10) || 0;
+    const minutes = parseInt(colonMatch[2] || '0', 10) || 0;
+    const seconds = parseInt(colonMatch[3] || '0', 10) || 0;
+    const totalMs = (hours * 60 * 60 + minutes * 60 + seconds) * 1000;
+    if (totalMs > 0) return totalMs;
+  }
   let totalMs = 0;
-  const unitRe = /(\d+)\s*(h|m|s)\b/g;
+  const unitRe = /(\d+)\s*(hours?|hrs?|hr|h|minutes?|mins?|min|m|seconds?|secs?|sec|s)/g;
   let unitMatch;
   while ((unitMatch = unitRe.exec(raw)) != null) {
     const value = parseInt(unitMatch[1], 10) || 0;
     const unit = unitMatch[2];
-    if (unit === 'h') totalMs += value * 60 * 60 * 1000;
-    else if (unit === 'm') totalMs += value * 60 * 1000;
-    else if (unit === 's') totalMs += value * 1000;
+    if (unit === 'h' || unit === 'hr' || unit === 'hrs' || unit === 'hour' || unit === 'hours') totalMs += value * 60 * 60 * 1000;
+    else if (unit === 'm' || unit === 'min' || unit === 'mins' || unit === 'minute' || unit === 'minutes') totalMs += value * 60 * 1000;
+    else if (unit === 's' || unit === 'sec' || unit === 'secs' || unit === 'second' || unit === 'seconds') totalMs += value * 1000;
   }
   if (totalMs > 0) return totalMs;
   const plainSeconds = raw.match(/^(\d+)$/);
