@@ -197,8 +197,8 @@ async function downloadText(url, depth = 0) {
       method: 'GET',
       timeout: 15000,
       headers: {
-        'User-Agent': 'WindsurfAPI-Clash/1.0',
-        'Accept': '*/*',
+        'User-Agent': 'Clash Verge/1.7.7 Mihomo/1.19.1',
+        'Accept': 'application/x-yaml, text/yaml, text/plain, */*',
       },
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
