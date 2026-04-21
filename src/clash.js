@@ -202,7 +202,7 @@ async function reserveClashSlot(meta = {}) {
   return withSlotReservationLock(async () => {
     syncSlotRuntimePool();
     const slot = Array.from(_slotStates.values())
-      .sort((a, b) => (a.lastUsedAt || 0) - (b.lastUsedAt || 0) || a.slotId - b.slotId)
+      .sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0) || a.slotId - b.slotId)
       .find(item => !item.leaseToken);
     if (!slot) return null;
     const token = safeString(meta?.token, '') || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
