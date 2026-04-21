@@ -2049,12 +2049,12 @@ const App = {
         status.innerHTML = `
           <div style="color:var(--accent);font-weight:600;margin-bottom:6px">发现新版本</div>
           <div class="text-sm" style="display:grid;gap:3px">
-            <div>当前: <code>${r.commit}</code> <span class="text-muted">${this.esc(r.localMessage)}</span></div>
-            <div>远程: <code>${r.remoteCommit}</code> <span class="text-muted">${this.esc(r.remoteMessage || '')}</span></div>
+            <div>当前: <code>${this.esc(r.commit)}</code> <span class="text-muted">${this.esc(r.localMessage)}</span></div>
+            <div>远程: <code>${this.esc(r.remoteCommit)}</code> <span class="text-muted">${this.esc(r.remoteMessage || '')}</span></div>
           </div>`;
         apply.classList.remove('hidden');
       } else {
-        status.innerHTML = `<span style="color:var(--success)">✓ 已是最新 (${r.commit}) · ${this.esc(r.localMessage)}</span>`;
+        status.innerHTML = `<span style="color:var(--success)">✓ 已是最新 (${this.esc(r.commit)}) · ${this.esc(r.localMessage)}</span>`;
         apply.classList.add('hidden');
       }
     } catch (err) {
@@ -2090,7 +2090,7 @@ const App = {
       if (!r.ok) throw new Error(r.error || '更新失败');
       if (r.changed) {
         status.innerHTML = `
-          <div style="color:var(--success);font-weight:600;margin-bottom:6px">更新完成 ${r.before} → ${r.after}</div>
+          <div style="color:var(--success);font-weight:600;margin-bottom:6px">更新完成 ${this.esc(r.before)} → ${this.esc(r.after)}</div>
           <div class="text-sm text-muted">服务正在后台重启 约 8 秒后自动刷新页面...</div>
           <pre style="margin-top:8px;font-size:11px;max-height:200px;overflow:auto;padding:8px;background:var(--surface-2);border-radius:4px">${this.esc(r.pullOutput || '')}</pre>`;
         setTimeout(() => location.reload(), 8000);

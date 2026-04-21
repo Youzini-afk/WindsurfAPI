@@ -211,6 +211,18 @@ In your client's settings for **Custom OpenAI Compatible**:
 - API Key: YOUR_API_KEY
 - Model: Choose any supported model.
 
+> **Cursor users**: Cursor's client-side whitelist blocks model names containing `claude` (the request never reaches the backend). Use these aliases instead:
+>
+> | Type in Cursor | Actual model |
+> |---|---|
+> | `opus-4.6` | claude-opus-4.6 |
+> | `sonnet-4.6` | claude-sonnet-4.6 |
+> | `opus-4.7` | claude-opus-4-7-medium |
+> | `ws-opus` | claude-opus-4.6 |
+> | `ws-sonnet` | claude-sonnet-4.6 |
+>
+> GPT / Gemini / DeepSeek models are not affected by Cursor's filter — use their original names.
+
 ## Environment Variables
 
 | Variable | Default | Description |

@@ -965,14 +965,11 @@ export async function initAuth() {
 
   // Periodic Firebase token refresh (every 50 min). Firebase ID tokens expire
   // after 60 min; refreshing at 50 keeps a comfortable margin.
-  const hasRefreshTokens = accounts.some(a => !!a.refreshToken);
-  if (hasRefreshTokens) {
-    const TOKEN_REFRESH_INTERVAL = 50 * 60 * 1000;
-    refreshAllFirebaseTokens().catch(e => log.warn(`Initial token refresh: ${e.message}`));
-    setInterval(() => {
-      refreshAllFirebaseTokens().catch(e => log.warn(`Scheduled token refresh: ${e.message}`));
-    }, TOKEN_REFRESH_INTERVAL).unref?.();
-  }
+  const TOKEN_REFRESH_INTERVAL = 50 * 60 * 1000;
+  refreshAllFirebaseTokens().catch(e => log.warn(`Initial token refresh: ${e.message}`));
+  setInterval(() => {
+    refreshAllFirebaseTokens().catch(e => log.warn(`Scheduled token refresh: ${e.message}`));
+  }, TOKEN_REFRESH_INTERVAL).unref?.();
 
   // Warm up an LS instance for each account's configured proxy so the first
   // chat request doesn't pay the spawn cost.

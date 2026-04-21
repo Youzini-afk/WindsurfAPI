@@ -210,6 +210,21 @@ curl http://localhost:3003/v1/messages \
 - API Key: 你设的 API_KEY
 - Model: 任选我们支持的模型
 
+> **Cursor 用户注意**：Cursor 客户端白名单会拦截含 `claude` 的模型名（请求根本不到后端）。用以下别名绕过：
+>
+> | 在 Cursor 填 | 实际模型 |
+> |---|---|
+> | `opus-4.6` | claude-opus-4.6 |
+> | `opus-4.6-thinking` | claude-opus-4.6-thinking |
+> | `opus-4.7` | claude-opus-4-7-medium |
+> | `sonnet-4.6` | claude-sonnet-4.6 |
+> | `sonnet-4.5` | claude-4.5-sonnet |
+> | `haiku-4.5` | claude-4.5-haiku |
+> | `ws-opus` | claude-opus-4.6 |
+> | `ws-sonnet` | claude-sonnet-4.6 |
+>
+> GPT / Gemini / DeepSeek 等不受 Cursor 白名单限制，直接填原名。
+
 ## 环境变量
 
 | 变量 | 默认值 | 干嘛的 |

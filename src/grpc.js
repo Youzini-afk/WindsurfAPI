@@ -215,6 +215,13 @@ export function grpcStream(port, csrfToken, path, body, opts = {}) {
   req.on('data', (chunk) => {
     if (settled) return;
     pendingBuf = Buffer.concat([pendingBuf, chunk]);
+    if (pendingBuf.length > 100 * 1024 * 1024) {
+      settled = true;
+      clearTimeout(timer);
+      try { req.close?.(http2.constants.NGHTTP2_CANCEL); } catch {}
+      onError?.(new Error('gRPC frame too large (>100MB)'));
+      return;
+    }
 
     while (pendingBuf.length >= 5) {
       const compressed = pendingBuf[0];

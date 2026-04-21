@@ -46,7 +46,7 @@ export function decodeVarint(buf, offset = 0) {
     if (!(byte & 0x80)) return { value: result >>> 0, length: pos - offset };
     shift += 7;
   }
-  if (pos >= buf.length) return { value: result >>> 0, length: pos - offset };
+  if (pos >= buf.length) throw new Error('Truncated varint');
   // Continuation byte needed beyond 28 bits — switch to BigInt.
   let big = BigInt(result >>> 0);
   let bigShift = BigInt(shift);
@@ -61,7 +61,7 @@ export function decodeVarint(buf, offset = 0) {
     bigShift += 7n;
     if (bigShift >= 64n) throw new Error('Varint overflow');
   }
-  return { value: Number(big), length: pos - offset };
+  throw new Error('Truncated varint');
 }
 
 // ─── Field-level writers (standalone functions) ────────────

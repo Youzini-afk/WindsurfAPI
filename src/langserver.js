@@ -34,7 +34,7 @@ let _apiServerUrl = DEFAULT_API_URL;
 function proxyKey(proxy) {
   if (!proxy || !proxy.host) return 'default';
   // Sanitize to [A-Za-z0-9_] — the key flows into a filesystem path
-  // (`/opt/windsurf/data/${key}`) and a shell-quoted mkdir, so strip any
+  // (`${config.windsurfDataDir}/${key}`) and a shell-quoted mkdir, so strip any
   // special character that could slip past execSync's naive quoting.
   const safeHost = proxy.host.replace(/[^a-zA-Z0-9]/g, '_');
   const safePort = String(proxy.port || 8080).replace(/[^0-9]/g, '');
@@ -125,7 +125,8 @@ export async function ensureLs(proxy = null) {
     }
 
     const dataDir = join(config.windsurfDataDir, key);
-    try { mkdirSync(join(dataDir, 'db'), { recursive: true }); } catch {}
+    const dbDir = join(dataDir, 'db');
+    try { mkdirSync(dbDir, { recursive: true }); } catch (e) { log.warn(`mkdirSync ${dbDir}: ${e.message}`); }
 
     const args = [
       `--api_server_url=${_apiServerUrl}`,

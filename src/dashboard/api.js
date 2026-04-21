@@ -855,7 +855,10 @@ async function gitStatus() {
   };
 }
 
+const PRIVATE_PROXY_HOST = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|localhost$|0\.0\.0\.0$)/i;
+
 async function testProxy({ host, port, username, password, type }) {
+  if (PRIVATE_PROXY_HOST.test(host)) throw new Error('代理地址不能指向内网/本机');
   const http = await import('node:http');
   const tls = await import('node:tls');
   return new Promise((resolve, reject) => {
