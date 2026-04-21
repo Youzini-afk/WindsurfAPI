@@ -1081,6 +1081,25 @@ window._firebaseOAuth = async function(provider) {
       </div>
     </div>
 
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <div class="section-title">批量导入号池</div>
+          <div class="section-desc">每行一条账号，按顺序自动登录并导入。优先识别“邮箱----密码”，也兼容 tab、竖线、冒号、逗号分隔</div>
+        </div>
+      </div>
+      <div class="section-body">
+        <textarea id="wl-bulk-text" class="input" style="width:100%;min-height:220px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.6" placeholder="foo@example.com----pass123\nbar@example.com----pass456" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter')App.windsurfBulkLogin()"></textarea>
+        <div class="field-row-actions">
+          <button class="btn btn-primary" onclick="App.windsurfBulkLogin()" id="wl-bulk-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            批量登录导入
+          </button>
+          <span class="text-sm text-muted">支持空行和以 # / // 开头的注释行</span>
+        </div>
+      </div>
+    </div>
+
     <div class="section" id="wl-proxy-section">
       <div class="section-header">
         <div>
@@ -1126,6 +1145,7 @@ window._firebaseOAuth = async function(provider) {
     </div>
 
     <div class="section hidden" id="wl-result"></div>
+    <div class="section hidden" id="wl-bulk-result"></div>
 
     <div class="section">
       <div class="section-header">
@@ -2078,6 +2098,29 @@ const App = {
   // ─── Windsurf Login ──────────────────────────
   loadWindsurfLogin() { this.renderLoginHistory(); },
 
+  getLoginProxy() {
+    const proxyHost = document.getElementById('wl-proxy-host').value.trim();
+    return proxyHost ? {
+      type: document.getElementById('wl-proxy-type').value,
+      host: proxyHost,
+      port: parseInt(document.getElementById('wl-proxy-port').value) || 8080,
+      username: document.getElementById('wl-proxy-user').value,
+      password: document.getElementById('wl-proxy-pass').value,
+    } : null;
+  },
+
+  formatLoginProxyLabel(proxy) {
+    return proxy ? `${proxy.type}://${proxy.host}:${proxy.port}` : '全局';
+  },
+
+  appendLoginHistory(entries) {
+    const list = Array.isArray(entries) ? entries : [entries];
+    for (const entry of list) this.loginHistory.unshift(entry);
+    if (this.loginHistory.length > 50) this.loginHistory.length = 50;
+    localStorage.setItem('wl_history', JSON.stringify(this.loginHistory));
+    this.renderLoginHistory();
+  },
+
   async oauthLogin(provider) {
     const btn = document.getElementById(`oauth-${provider}-btn`);
     const status = document.getElementById('oauth-status');
@@ -2101,11 +2144,7 @@ const App = {
       status.textContent = `登录成功 ${r.email || label} 已加入账号池`;
       this.toast(`${label} 登录成功`, 'success');
       this.loadAccounts();
-      const entry = { time: new Date().toISOString(), email: r.email || label, proxy: '直连', status: 'ok', method: label };
-      this.loginHistory.unshift(entry);
-      if (this.loginHistory.length > 50) this.loginHistory.length = 50;
-      localStorage.setItem('wl_history', JSON.stringify(this.loginHistory));
-      this.renderLoginHistory();
+      this.appendLoginHistory({ time: new Date().toISOString(), email: r.email || label, proxy: '默认', status: 'success', method: label });
     } catch (err) {
       status.style.color = '#ef4444';
       status.textContent = `${label} 登录失败: ${err.message}`;
@@ -2120,21 +2159,15 @@ const App = {
     const password = document.getElementById('wl-password').value.trim();
     if (!email || !password) return this.toast('请输入邮箱和密码', 'error');
 
-    const proxyHost = document.getElementById('wl-proxy-host').value.trim();
-    const proxy = proxyHost ? {
-      type: document.getElementById('wl-proxy-type').value,
-      host: proxyHost,
-      port: parseInt(document.getElementById('wl-proxy-port').value) || 8080,
-      username: document.getElementById('wl-proxy-user').value,
-      password: document.getElementById('wl-proxy-pass').value,
-    } : null;
+    const proxy = this.getLoginProxy();
     const autoAdd = document.getElementById('wl-auto-add').checked;
 
     const btn = document.getElementById('wl-btn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> 登录中...';
 
-    const entry = { time: new Date().toISOString(), email, proxy: proxy ? `${proxy.type}://${proxy.host}:${proxy.port}` : '全局', status: 'pending' };
+    const entry = { time: new Date().toISOString(), email, proxy: this.formatLoginProxyLabel(proxy), status: 'pending' };
+    document.getElementById('wl-bulk-result')?.classList.add('hidden');
 
     try {
       const r = await this.api('POST', '/windsurf-login', { email, password, proxy, autoAdd });
@@ -2158,7 +2191,7 @@ const App = {
               ${r.account ? `<tr><td style="color:var(--text-muted)">账号 ID</td><td><code>${r.account.id}</code> <span class="badge active">${r.account.status}</span></td></tr>` : ''}
             </table>
           </div>`;
-        this.toast('登录成功，账号已加入');
+        this.toast(autoAdd ? '登录成功，账号已加入' : '登录成功');
       } else {
         entry.status = 'error: ' + (r.error || 'unknown');
         const rd = document.getElementById('wl-result');
@@ -2187,19 +2220,81 @@ const App = {
       this.toast(err.message, 'error');
     }
 
-    this.loginHistory.unshift(entry);
-    if (this.loginHistory.length > 50) this.loginHistory.length = 50;
-    localStorage.setItem('wl_history', JSON.stringify(this.loginHistory));
-    this.renderLoginHistory();
+    this.appendLoginHistory(entry);
     btn.disabled = false;
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> 登录';
+  },
+
+  renderBulkLoginResult(r, autoAdd) {
+    const rd = document.getElementById('wl-bulk-result');
+    if (!rd) return;
+    const rows = (r.results || []).map(item => {
+      const ok = !!item.success;
+      return `<tr>
+        <td class="text-sm">${this.esc(String(item.line || '-'))}</td>
+        <td>${this.esc(item.email || '-')}</td>
+        <td><span class="badge ${ok ? 'active' : 'error'}">${ok ? '成功' : '失败'}</span></td>
+        <td class="text-sm">${ok ? this.esc(item.account?.id || item.name || '-') : `<span style="color:var(--error)">${this.esc(item.error || '未知错误')}</span>`}</td>
+      </tr>`;
+    }).join('') || '<tr class="empty-row"><td colspan="4">暂无结果</td></tr>';
+    rd.classList.remove('hidden');
+    rd.innerHTML = `
+      <div class="section-header">
+        <div>
+          <div class="section-title" style="color:${r.failCount ? 'var(--warning)' : 'var(--success)'}">批量导入完成</div>
+          <div class="section-desc">共 ${this.esc(String(r.total || 0))} 条，成功 ${this.esc(String(r.successCount || 0))} 条，失败 ${this.esc(String(r.failCount || 0))} 条${autoAdd ? '，成功项已导入号池' : ''}</div>
+        </div>
+      </div>
+      <div class="section-body tight">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>行号</th><th>邮箱</th><th>状态</th><th>结果</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  },
+
+  async windsurfBulkLogin() {
+    const text = document.getElementById('wl-bulk-text').value;
+    if (!text.trim()) return this.toast('请先粘贴账号列表', 'error');
+    const proxy = this.getLoginProxy();
+    const autoAdd = document.getElementById('wl-auto-add').checked;
+    const btn = document.getElementById('wl-bulk-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> 导入中...';
+    document.getElementById('wl-result')?.classList.add('hidden');
+    try {
+      const r = await this.api('POST', '/windsurf-login/bulk', { text, proxy, autoAdd });
+      if (!r.success) throw new Error(r.error || '批量导入失败');
+      this.renderBulkLoginResult(r, autoAdd);
+      const now = Date.now();
+      this.appendLoginHistory((r.results || []).map((item, index) => ({
+        time: new Date(now + index).toISOString(),
+        email: item.email || `第 ${item.line} 行`,
+        proxy: this.formatLoginProxyLabel(proxy),
+        status: item.success ? 'success' : `error: ${item.error || '未知错误'}`,
+      })));
+      if (autoAdd && (r.successCount || 0) > 0) this.loadAccounts();
+      this.toast(`批量导入完成：成功 ${r.successCount || 0} / ${r.total || 0}`, r.failCount ? 'info' : 'success');
+    } catch (err) {
+      this.toast(err.message, 'error');
+      const rd = document.getElementById('wl-bulk-result');
+      if (rd) {
+        rd.classList.remove('hidden');
+        rd.innerHTML = `<div class="section-header"><div><div class="section-title" style="color:var(--error)">批量导入失败</div></div></div><div class="section-body"><p class="text-sm">${this.esc(err.message)}</p></div>`;
+      }
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> 批量登录导入';
+    }
   },
 
   renderLoginHistory() {
     const tbody = document.querySelector('#wl-history-table tbody');
     if (!tbody) return;
     tbody.innerHTML = this.loginHistory.map((h, i) => {
-      const ok = h.status === 'success';
+      const ok = h.status === 'success' || h.status === 'ok';
       return `<tr>
         <td class="text-sm nowrap">${new Date(h.time).toLocaleString()}</td>
         <td>${this.esc(h.email)}</td>
@@ -3186,19 +3281,15 @@ const App = {
   },
 
   async testLoginProxy() {
-    const host = document.getElementById('wl-proxy-host').value.trim();
-    const port = parseInt(document.getElementById('wl-proxy-port').value) || 0;
-    if (!host || !port) return this.toast('请先填主机和端口', 'error');
-    const type = document.getElementById('wl-proxy-type').value;
-    const username = document.getElementById('wl-proxy-user').value.trim();
-    const password = document.getElementById('wl-proxy-pass').value;
+    const proxy = this.getLoginProxy();
+    if (!proxy?.host || !proxy?.port) return this.toast('请先填主机和端口', 'error');
     const btn = document.getElementById('wl-proxy-test-btn');
     const out = document.getElementById('wl-proxy-test-result');
     btn.disabled = true;
     out.textContent = '测试中...';
     out.style.color = 'var(--text-muted)';
     try {
-      const r = await this.api('POST', '/test-proxy', { host, port, username, password, type });
+      const r = await this.api('POST', '/test-proxy', proxy);
       if (r.ok) {
         out.textContent = `✓ 连通成功 出口 IP ${r.egressIp} · 耗时 ${r.latencyMs}ms`;
         out.style.color = 'var(--success)';

@@ -51,6 +51,72 @@ function checkAuth(req) {
   return true;  // No password and no API key = open access
 }
 
+function parseBulkLoginText(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const items = [];
+  const patterns = [
+    /\s*-{4,}\s*/,
+    /\s*—{2,}\s*/,
+    /\s*\t+\s*/,
+    /\s*[|｜]\s*/,
+    /\s*[:：]\s*/,
+    /\s*[,，]\s*/,
+  ];
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i];
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith('//')) continue;
+    let best = null;
+    for (const pattern of patterns) {
+      const match = pattern.exec(line);
+      if (match && (!best || match.index < best.index)) {
+        best = { index: match.index, length: match[0].length };
+      }
+    }
+    if (!best) {
+      items.push({ line: i + 1, raw: line, error: '无法识别该行，请使用“邮箱----密码”格式' });
+      continue;
+    }
+    const email = line.slice(0, best.index).trim();
+    const password = line.slice(best.index + best.length).trim();
+    if (!email || !password) {
+      items.push({ line: i + 1, raw: line, email, error: '该行缺少邮箱或密码' });
+      continue;
+    }
+    items.push({ line: i + 1, email, password });
+  }
+  return items;
+}
+
+async function executeWindsurfLogin({ email, password, loginProxy, autoAdd }) {
+  if (!email || !password) {
+    const err = new Error('email 和 password 為必填');
+    err.statusCode = 400;
+    throw err;
+  }
+  const proxy = loginProxy?.host ? loginProxy : (getEffectiveProxy() || null);
+  const result = await windsurfLogin(email, password, proxy);
+  let account = null;
+  if (autoAdd !== false) {
+    account = addAccountByKey(result.apiKey, result.name || email);
+    if (result.refreshToken) {
+      setAccountTokens(account.id, { refreshToken: result.refreshToken, idToken: result.idToken });
+    }
+    if (loginProxy?.host) setAccountProxy(account.id, loginProxy);
+    ensureLsForAccount(account.id)
+      .then(() => probeAccount(account.id))
+      .catch(e => log.warn(`Auto-probe failed: ${e.message}`));
+  }
+  return {
+    success: true,
+    apiKey: result.apiKey,
+    name: result.name,
+    email: result.email,
+    apiServerUrl: result.apiServerUrl,
+    account: account ? { id: account.id, email: account.email, status: account.status } : null,
+  };
+}
+
 /**
  * Handle all /dashboard/api/* requests.
  */
@@ -520,40 +586,64 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
   if (subpath === '/windsurf-login' && method === 'POST') {
     try {
       const { email, password, proxy: loginProxy, autoAdd } = body;
-      if (!email || !password) return json(res, 400, { error: 'email 和 password 為必填' });
-
-      // Use provided proxy, or global proxy
-      const proxy = loginProxy?.host ? loginProxy : (getEffectiveProxy() || null);
-
-      const result = await windsurfLogin(email, password, proxy);
-
-      // Auto-add to account pool if requested
-      let account = null;
-      if (autoAdd !== false) {
-        account = addAccountByKey(result.apiKey, result.name || email);
-        // Persist refresh token via the setter so it survives restart and
-        // the background Firebase-renewal loop can find it.
-        if (result.refreshToken) {
-          setAccountTokens(account.id, { refreshToken: result.refreshToken, idToken: result.idToken });
-        }
-        // Persist the per-account proxy we used for login so chat requests
-        // also egress through the same IP, then warm up a matching LS.
-        if (loginProxy?.host) setAccountProxy(account.id, loginProxy);
-        ensureLsForAccount(account.id)
-          .then(() => probeAccount(account.id))
-          .catch(e => log.warn(`Auto-probe failed: ${e.message}`));
-      }
-
-      return json(res, 200, {
-        success: true,
-        apiKey: result.apiKey,
-        name: result.name,
-        email: result.email,
-        apiServerUrl: result.apiServerUrl,
-        account: account ? { id: account.id, email: account.email, status: account.status } : null,
-      });
+      return json(res, 200, await executeWindsurfLogin({ email, password, loginProxy, autoAdd }));
     } catch (err) {
       return json(res, 400, { error: err.message, isAuthFail: !!err.isAuthFail, firebaseCode: err.firebaseCode });
+    }
+  }
+
+  if (subpath === '/windsurf-login/bulk' && method === 'POST') {
+    try {
+      const { text, accounts, proxy: loginProxy, autoAdd } = body || {};
+      const items = Array.isArray(accounts)
+        ? accounts.map((acct, index) => ({
+            line: index + 1,
+            email: String(acct?.email || '').trim(),
+            password: String(acct?.password || '').trim(),
+            error: !acct?.email || !acct?.password ? '该行缺少邮箱或密码' : '',
+          }))
+        : parseBulkLoginText(text);
+      if (!items.length) {
+        return json(res, 400, { error: '请粘贴至少一条“邮箱----密码”格式的账号' });
+      }
+      const results = [];
+      for (const item of items) {
+        if (item.error) {
+          results.push({ line: item.line, email: item.email || '', success: false, error: item.error });
+          continue;
+        }
+        try {
+          const result = await executeWindsurfLogin({ email: item.email, password: item.password, loginProxy, autoAdd });
+          results.push({
+            line: item.line,
+            email: item.email,
+            success: true,
+            name: result.name,
+            apiKey: result.apiKey,
+            apiServerUrl: result.apiServerUrl,
+            account: result.account,
+          });
+        } catch (err) {
+          results.push({
+            line: item.line,
+            email: item.email,
+            success: false,
+            error: err.message,
+            isAuthFail: !!err.isAuthFail,
+            firebaseCode: err.firebaseCode || '',
+          });
+        }
+      }
+      const successCount = results.filter(item => item.success).length;
+      return json(res, 200, {
+        success: true,
+        total: results.length,
+        successCount,
+        failCount: results.length - successCount,
+        results,
+      });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
     }
   }
 
