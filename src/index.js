@@ -5,6 +5,7 @@ import { initClash, shutdownClash } from './clash.js';
 import { startLanguageServer, waitForReady, isLanguageServerRunning, stopLanguageServer } from './langserver.js';
 import { startServer } from './server.js';
 import { config, log } from './config.js';
+import { execSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -31,7 +32,10 @@ async function main() {
   console.log(banner);
   console.log(`  OpenAI-compatible proxy for Windsurf — by dwgx1337\n`);
 
-  // Start language server binary
+  // Start language server binary.
+  // Auto-install if missing — users repeatedly miss the manual install step
+  // and open "request crashes" issues (see #18), so we just do it ourselves.
+  // Skipped on Windows (LS is Linux-only) and when install-ls.sh isn't present.
   const binaryPath = config.lsBinaryPath;
   try {
     mkdirSync(config.appDataDir, { recursive: true });
@@ -45,6 +49,28 @@ async function main() {
     }
   } catch {}
   await initClash();
+  if (!existsSync(binaryPath) && process.platform !== 'win32') {
+    const scriptPath = (() => {
+      try {
+        const here = dirname(fileURLToPath(import.meta.url));
+        return join(here, '..', 'install-ls.sh');
+      } catch { return null; }
+    })();
+    if (scriptPath && existsSync(scriptPath)) {
+      log.info(`Language server binary missing at ${binaryPath}`);
+      log.info(`Auto-installing via ${scriptPath} — this runs once.`);
+      try {
+        execSync(`bash "${scriptPath}"`, {
+          stdio: 'inherit',
+          env: { ...process.env, LS_INSTALL_PATH: binaryPath },
+        });
+        log.info('Language server binary installed.');
+      } catch (err) {
+        log.error(`Auto-install failed: ${err.message}`);
+        log.error('Run manually:  bash install-ls.sh  (or set LS_BINARY_PATH to point at an existing binary)');
+      }
+    }
+  }
   if (existsSync(binaryPath)) {
     await startLanguageServer({
       binaryPath,

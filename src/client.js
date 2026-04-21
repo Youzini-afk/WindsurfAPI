@@ -11,6 +11,7 @@ import https from 'https';
 import { randomUUID } from 'crypto';
 import { pathToFileURL } from 'url';
 import { config, log } from './config.js';
+import { extractImages } from './image.js';
 import { grpcFrame, grpcUnary, grpcStream } from './grpc.js';
 import { getLsEntryByPort } from './langserver.js';
 import {
@@ -259,9 +260,12 @@ export class WindsurfClient {
       // emission contract there). This function just stitches system + u/a
       // turns into the single text payload Cascade accepts.
       let text;
+      let images = [];
       if (reuseEntry?.cascadeId) {
         const lastUser = [...messages].reverse().find(m => m.role === 'user');
-        text = lastUser ? contentToString(lastUser.content) : '';
+        const extracted = await extractImages(lastUser?.content ?? '');
+        text = extracted.text;
+        images = extracted.images;
       } else {
         const systemMsgs = messages.filter(m => m.role === 'system');
         const convo = messages.filter(m => m.role === 'user' || m.role === 'assistant');
@@ -269,7 +273,9 @@ export class WindsurfClient {
 
         if (convo.length <= 1) {
           const last = convo[convo.length - 1];
-          text = last ? contentToString(last.content) : '';
+          const extracted = await extractImages(last?.content ?? '');
+          text = extracted.text;
+          images = extracted.images;
         } else {
           const lines = [];
           for (let i = 0; i < convo.length - 1; i++) {
@@ -278,15 +284,17 @@ export class WindsurfClient {
             lines.push(`${label}: ${contentToString(m.content)}`);
           }
           const latest = convo[convo.length - 1];
-          const latestText = latest ? contentToString(latest.content) : '';
-          text = `[Conversation so far]\n${lines.join('\n\n')}\n\n[Current user message]\n${latestText}`;
+          const extracted = await extractImages(latest?.content ?? '');
+          text = `[Conversation so far]\n${lines.join('\n\n')}\n\n[Current user message]\n${extracted.text}`;
+          images = extracted.images;
         }
         if (sysText) text = sysText + '\n\n' + text;
       }
+      if (images.length) log.info(`Cascade: attaching ${images.length} image(s) to field 6`);
 
       // Step 2: Send message (retry once on panel-state-not-found)
       const sendMessage = async () => {
-        const sendProto = buildSendCascadeMessageRequest(this.apiKey, cascadeId, text, modelEnum, modelUid, sessionId, { toolPreamble });
+        const sendProto = buildSendCascadeMessageRequest(this.apiKey, cascadeId, text, modelEnum, modelUid, sessionId, { toolPreamble, images });
         await grpcUnary(
           this.port, this.csrfToken, `${LS_SERVICE}/SendUserCascadeMessage`, grpcFrame(sendProto)
         );

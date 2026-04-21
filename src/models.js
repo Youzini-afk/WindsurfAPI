@@ -31,6 +31,7 @@ export const MODELS = {
   'claude-sonnet-4.6-thinking-1m':  { name: 'claude-sonnet-4.6-thinking-1m',  provider: 'anthropic', enumValue: 0,   modelUid: 'claude-sonnet-4-6-thinking-1m', credit: 16 },
   'claude-opus-4.6':                { name: 'claude-opus-4.6',                provider: 'anthropic', enumValue: 0,   modelUid: 'claude-opus-4-6', credit: 6 },
   'claude-opus-4.6-thinking':       { name: 'claude-opus-4.6-thinking',       provider: 'anthropic', enumValue: 0,   modelUid: 'claude-opus-4-6-thinking', credit: 8 },
+  'claude-opus-4-7-medium':         { name: 'claude-opus-4-7-medium',         provider: 'anthropic', enumValue: 0,   modelUid: 'claude-opus-4-7-medium', credit: 8 },
 
   // ── GPT ─────────────────────────────────────────────────
   'gpt-4o':                         { name: 'gpt-4o',                         provider: 'openai', enumValue: 109, modelUid: 'MODEL_CHAT_GPT_4O_2024_08_06', credit: 1 },
@@ -210,6 +211,15 @@ const ANTHROPIC_DATED = {
   'claude-sonnet-4-5-20250929': 'claude-4.5-sonnet',
   'claude-opus-4-5':            'claude-4.5-opus',
   'claude-opus-4-5-20251101':   'claude-4.5-opus',
+
+  // Anthropic Opus 4.7 — Windsurf currently only exposes `claude-opus-4-7-medium`
+  // via GetCascadeModelConfigs (mergeCloudModels adds it at runtime). Clients like
+  // Claude Code send the bare `claude-opus-4-7`, so resolve every common spelling
+  // to the -medium variant until Windsurf ships other reasoning levels.
+  'claude-opus-4-7':            'claude-opus-4-7-medium',
+  'claude-opus-4-7-latest':     'claude-opus-4-7-medium',
+  'claude-opus-4.7':            'claude-opus-4-7-medium',
+  'claude-opus-4.7-thinking':   'claude-opus-4-7-medium',
 };
 for (const [k, v] of Object.entries(ANTHROPIC_DATED)) _lookup.set(k, v);
 
@@ -226,6 +236,38 @@ const OPENAI_DATED = {
   'gpt-5-pro-2025-10-06': 'gpt-5-high',
 };
 for (const [k, v] of Object.entries(OPENAI_DATED)) _lookup.set(k, v);
+
+// Cursor-friendly aliases — Cursor's client-side whitelist blocks model names
+// containing "claude". These prefixes bypass the filter while resolving to the
+// same Windsurf backend models. Use any of these in Cursor's Custom Model field.
+const CURSOR_ALIASES = {
+  // opus
+  'opus-4.6':              'claude-opus-4.6',
+  'opus-4.6-thinking':     'claude-opus-4.6-thinking',
+  'opus-4-7':              'claude-opus-4-7-medium',
+  'opus-4.7':              'claude-opus-4-7-medium',
+  // sonnet
+  'sonnet-4.6':            'claude-sonnet-4.6',
+  'sonnet-4.6-thinking':   'claude-sonnet-4.6-thinking',
+  'sonnet-4.6-1m':         'claude-sonnet-4.6-1m',
+  'sonnet-4.5':            'claude-4.5-sonnet',
+  'sonnet-4.5-thinking':   'claude-4.5-sonnet-thinking',
+  // haiku
+  'haiku-4.5':             'claude-4.5-haiku',
+  // older
+  'sonnet-4':              'claude-4-sonnet',
+  'opus-4':                'claude-4-opus',
+  'opus-4.1':              'claude-4.1-opus',
+  'sonnet-3.7':            'claude-3.7-sonnet',
+  'sonnet-3.5':            'claude-3.5-sonnet',
+  // ws-* prefix variant (even safer against future whitelist updates)
+  'ws-opus':               'claude-opus-4.6',
+  'ws-sonnet':             'claude-sonnet-4.6',
+  'ws-opus-thinking':      'claude-opus-4.6-thinking',
+  'ws-sonnet-thinking':    'claude-sonnet-4.6-thinking',
+  'ws-haiku':              'claude-4.5-haiku',
+};
+for (const [k, v] of Object.entries(CURSOR_ALIASES)) _lookup.set(k, v);
 
 /** Resolve user model name → internal model key. */
 export function resolveModel(name) {

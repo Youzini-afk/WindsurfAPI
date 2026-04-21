@@ -37,11 +37,14 @@ function anthropicToOpenAI(body) {
       messages.push({ role, content: m.content });
     } else if (Array.isArray(m.content)) {
       const textParts = [];
+      const imageParts = [];
       const toolCalls = [];
       const toolResults = [];
       for (const block of m.content) {
         if (block.type === 'text') {
           textParts.push(block.text || '');
+        } else if (block.type === 'image') {
+          imageParts.push(block);
         } else if (block.type === 'thinking') {
           // Thinking blocks from assistant history — skip; the model will regenerate
         } else if (block.type === 'tool_use' && role === 'assistant') {
@@ -65,6 +68,10 @@ function anthropicToOpenAI(body) {
           content: textParts.length ? textParts.join('\n') : null,
           tool_calls: toolCalls,
         });
+      } else if (imageParts.length) {
+        const contentArr = [...imageParts];
+        if (textParts.length) contentArr.push({ type: 'text', text: textParts.join('\n') });
+        messages.push({ role, content: contentArr });
       } else if (textParts.length) {
         messages.push({ role, content: textParts.join('\n') });
       }
