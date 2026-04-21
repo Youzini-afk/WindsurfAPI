@@ -260,12 +260,12 @@ export async function getCascadeModelConfigs(apiKey, proxy = null) {
 
 /**
  * Pre-flight check: does this account still have message capacity?
- * Returns { hasCapacity, messagesRemaining, maxMessages }.
+ * Returns { hasCapacity, messagesRemaining, maxMessages, message }.
  * -1 means unlimited.
  *
  * @param {string} apiKey
  * @param {object} [proxy]
- * @returns {Promise<{hasCapacity: boolean, messagesRemaining: number, maxMessages: number}>}
+ * @returns {Promise<{hasCapacity: boolean, messagesRemaining: number, maxMessages: number, message: string}>}
  */
 export async function checkMessageRateLimit(apiKey, proxy = null) {
   const body = { metadata: buildMetadata(apiKey) };
@@ -284,6 +284,7 @@ export async function checkMessageRateLimit(apiKey, proxy = null) {
           hasCapacity: res.data.hasCapacity !== false,
           messagesRemaining: res.data.messagesRemaining ?? -1,
           maxMessages: res.data.maxMessages ?? -1,
+          message: String(res.data.message || res.data.error || res.raw || ''),
         };
       } catch (e) {
         lastErr = e;
@@ -294,5 +295,5 @@ export async function checkMessageRateLimit(apiKey, proxy = null) {
   }
   // On failure, assume capacity so we don't block requests.
   log.warn(`CheckRateLimit failed: ${lastErr?.message}`);
-  return { hasCapacity: true, messagesRemaining: -1, maxMessages: -1 };
+  return { hasCapacity: true, messagesRemaining: -1, maxMessages: -1, message: '' };
 }

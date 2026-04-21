@@ -30,6 +30,28 @@ const HEARTBEAT_MS = 15_000;
 const QUEUE_RETRY_MS = 1_000;
 const QUEUE_MAX_WAIT_MS = 30_000;
 
+function parseRateLimitResetMs(message = '') {
+  const text = String(message || '');
+  if (!text) return 0;
+  const match = text.match(/resets?\s+in\s*:\s*([^\]\n\r]+)/i);
+  if (!match) return 0;
+  const raw = match[1].trim().toLowerCase();
+  let totalMs = 0;
+  const unitRe = /(\d+)\s*(h|m|s)\b/g;
+  let unitMatch;
+  while ((unitMatch = unitRe.exec(raw)) != null) {
+    const value = parseInt(unitMatch[1], 10) || 0;
+    const unit = unitMatch[2];
+    if (unit === 'h') totalMs += value * 60 * 60 * 1000;
+    else if (unit === 'm') totalMs += value * 60 * 1000;
+    else if (unit === 's') totalMs += value * 1000;
+  }
+  if (totalMs > 0) return totalMs;
+  const plainSeconds = raw.match(/^(\d+)$/);
+  if (plainSeconds) return (parseInt(plainSeconds[1], 10) || 0) * 1000;
+  return 0;
+}
+
 // ── Model identity prompt ──────────────────────────────────
 // Templates live in runtime-config (editable from the dashboard). Use {model}
 // as a placeholder for the requested model name. Only applied when the
@@ -299,7 +321,8 @@ export async function handleChatCompletions(body) {
           const rl = await checkMessageRateLimit(acct.apiKey, acct.proxy || null);
           if (!rl.hasCapacity) {
             log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
-            markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);
+            const dynamicCooldown = parseRateLimitResetMs(rl?.message || '') || 5 * 60 * 1000;
+            markRateLimited(acct.apiKey, dynamicCooldown, modelKey);
             continue;
           }
         } catch (e) {
@@ -474,7 +497,12 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
     const isRateLimit = /rate limit|rate_limit|too many requests|quota/i.test(err.message);
     const isInternal = /internal error occurred.*error id/i.test(err.message);
     if (isAuthFail) reportError(apiKey);
-    if (isRateLimit) { markRateLimited(apiKey, 5 * 60 * 1000, modelKey); err.isRateLimit = true; err.isModelError = true; }
+    if (isRateLimit) {
+      const dynamicCooldown = parseRateLimitResetMs(err.message) || 5 * 60 * 1000;
+      markRateLimited(apiKey, dynamicCooldown, modelKey);
+      err.isRateLimit = true;
+      err.isModelError = true;
+    }
     if (isInternal) { reportInternalError(apiKey); err.isModelError = true; }
     if (err.isModelError && !isRateLimit && !isInternal) {
       updateCapability(apiKey, modelKey, false, 'model_error');
@@ -720,7 +748,8 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
                 const rl = await checkMessageRateLimit(acct.apiKey, acct.proxy || null);
                 if (!rl.hasCapacity) {
                   log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
-                  markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);
+                  const dynamicCooldown = parseRateLimitResetMs(rl?.message || '') || 5 * 60 * 1000;
+                  markRateLimited(acct.apiKey, dynamicCooldown, modelKey);
                   continue;
                 }
               } catch (e) {
@@ -812,7 +841,12 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
             const isRateLimit = /rate limit|rate_limit|too many requests|quota/i.test(err.message);
             const isInternal = /internal error occurred.*error id/i.test(err.message);
             if (isAuthFail) reportError(currentApiKey);
-            if (isRateLimit) { markRateLimited(currentApiKey, 5 * 60 * 1000, modelKey); err.isRateLimit = true; err.isModelError = true; }
+            if (isRateLimit) {
+              const dynamicCooldown = parseRateLimitResetMs(err.message) || 5 * 60 * 1000;
+              markRateLimited(currentApiKey, dynamicCooldown, modelKey);
+              err.isRateLimit = true;
+              err.isModelError = true;
+            }
             if (isInternal) { reportInternalError(currentApiKey); err.isModelError = true; }
             if (err.isModelError && !isRateLimit && !isInternal) {
               updateCapability(currentApiKey, modelKey, false, 'model_error');

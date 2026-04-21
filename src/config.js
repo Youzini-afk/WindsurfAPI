@@ -86,7 +86,7 @@ export const config = {
   codeiumApiUrl: process.env.CODEIUM_API_URL || 'https://server.self-serve.windsurf.com',
   defaultModel: process.env.DEFAULT_MODEL || 'claude-4.5-sonnet-thinking',
   maxTokens: parseInt(process.env.MAX_TOKENS || '8192', 10),
-  chatMaxAccountAttempts: Math.max(1, parseInt(process.env.CHAT_MAX_ACCOUNT_ATTEMPTS || '3', 10) || 3),
+  chatMaxAccountAttempts: Math.max(1, parseInt(process.env.CHAT_MAX_ACCOUNT_ATTEMPTS || '30', 10) || 30),
   logLevel: process.env.LOG_LEVEL || 'info',
 
   // Language server
