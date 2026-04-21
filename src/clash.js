@@ -52,6 +52,29 @@ let _startPromise = null;
 let _randomSwitchPromise = null;
 const _delayRefreshPromises = new Map();
 let _autoDelayTimer = null;
+const _activeStreamLocks = new Map();
+
+function getActiveStreamLockCount() {
+  return _activeStreamLocks.size;
+}
+
+function beginClashStreamGuard(meta = {}) {
+  const token = safeString(meta?.token, '') || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  _activeStreamLocks.set(token, {
+    token,
+    accountId: safeString(meta?.accountId, ''),
+    modelKey: safeString(meta?.modelKey, ''),
+    reason: safeString(meta?.reason, ''),
+    createdAt: Date.now(),
+  });
+  return token;
+}
+
+function endClashStreamGuard(token = '') {
+  const normalizedToken = safeString(token, '');
+  if (!normalizedToken) return;
+  _activeStreamLocks.delete(normalizedToken);
+}
 
 function parseBool(value, fallback = false) {
   if (value == null || value === '') return fallback;
@@ -585,6 +608,8 @@ function buildRandomStatus(groups = [], selectedGroup = '') {
     lastSwitchProxy: _state.randomLastSwitchProxy,
     cachedResultsCount: cacheEntry.results.length,
     eligibleCount: candidates.length,
+    activeStreamCount: getActiveStreamLockCount(),
+    switchGuardActive: getActiveStreamLockCount() > 0,
   };
 }
 
@@ -644,6 +669,8 @@ export function getClashStatus(includeProfileBody = false) {
     randomLastDelayGroup: _state.randomLastDelayGroup,
     randomLastSwitchAt: _state.randomLastSwitchAt,
     randomLastSwitchProxy: _state.randomLastSwitchProxy,
+    activeStreamCount: getActiveStreamLockCount(),
+    randomSwitchGuardActive: getActiveStreamLockCount() > 0,
     proxy: getClashProxy(),
     effectiveTakeover: !!getClashProxy(),
   };
@@ -890,6 +917,26 @@ async function maybeRandomizeClashNode(meta = {}) {
       log.warn(`Clash random selection skipped: no eligible nodes for ${targetGroupName}`);
       return { switched: false, proxy: targetGroup.now || _state.currentProxy || '', groupName: targetGroupName, candidates: 0 };
     }
+    const activeStreamCount = getActiveStreamLockCount();
+    if (activeStreamCount > 0) {
+      const currentProxy = safeString(targetGroup.now || _state.currentProxy || '', '');
+      if (currentProxy) {
+        _state.groupName = targetGroupName;
+        _state.currentGroup = targetGroupName;
+        _state.currentProxy = currentProxy;
+        if (meta?.reason) {
+          log.debug(`Clash random node switch deferred: ${currentProxy} kept for ${targetGroupName} while ${activeStreamCount} stream(s) active reason=${meta.reason}`);
+        }
+        return {
+          switched: false,
+          proxy: currentProxy,
+          groupName: targetGroupName,
+          candidates: candidates.length,
+          deferred: true,
+          activeStreamCount,
+        };
+      }
+    }
     const nextProxy = pickRandomNode(candidates, targetGroup.now || _state.currentProxy || '');
     if (!nextProxy) {
       return { switched: false, proxy: targetGroup.now || _state.currentProxy || '', groupName: targetGroupName, candidates: candidates.length };
@@ -909,7 +956,12 @@ async function maybeRandomizeClashNode(meta = {}) {
     if (meta?.reason) {
       log.debug(`Clash random node selected: ${nextProxy} group=${targetGroupName} reason=${meta.reason}`);
     }
-    return { switched, proxy: nextProxy, groupName: targetGroupName, candidates: candidates.length };
+    return {
+      switched,
+      proxy: nextProxy,
+      groupName: targetGroupName,
+      candidates: candidates.length,
+    };
   })().catch((err) => {
     _state.lastError = err.message;
     saveState();
@@ -933,6 +985,14 @@ export async function prepareClashForRequest(meta = {}) {
     log.warn(`Clash random selection failed: ${err.message}`);
   }
   return getClashProxy();
+}
+
+export function acquireClashStreamGuard(meta = {}) {
+  return beginClashStreamGuard(meta);
+}
+
+export function releaseClashStreamGuard(token = '') {
+  endClashStreamGuard(token);
 }
 
 export function getClashLogs(limit = _state.logLines) {

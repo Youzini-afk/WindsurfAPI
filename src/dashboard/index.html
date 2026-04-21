@@ -3125,6 +3125,9 @@ const App = {
     if ((d.randomDelayCheckIntervalMinutes || 0) > 0) {
       parts.push(`自动测速 ${d.randomDelayCheckIntervalMinutes} 分钟`);
     }
+    if ((randomStatus.activeStreamCount || d.activeStreamCount || 0) > 0) {
+      parts.push(`流式保护中 ${randomStatus.activeStreamCount || d.activeStreamCount || 0} 个请求`);
+    }
     if (d.randomLastDelayTestAt) {
       parts.push(`上次测速 ${new Date(d.randomLastDelayTestAt).toLocaleString()}`);
     }

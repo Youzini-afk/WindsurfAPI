@@ -14,6 +14,7 @@ import { isModelAllowed } from '../dashboard/model-access.js';
 import { cacheKey, cacheGet, cacheSet } from '../cache.js';
 import { isExperimentalEnabled, getIdentityPromptFor } from '../runtime-config.js';
 import { checkMessageRateLimit } from '../windsurf-api.js';
+import { acquireClashStreamGuard, releaseClashStreamGuard } from '../clash.js';
 import { prepareEffectiveProxy } from '../dashboard/proxy-config.js';
 import {
   fingerprintBefore, fingerprintAfter, checkout as poolCheckout, checkin as poolCheckin,
@@ -698,36 +699,41 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
           tried.push(acct.apiKey);
           currentApiKey = acct.apiKey;
           acct.proxy = await prepareEffectiveProxy(acct.id, { reason: 'chat_stream_attempt', modelKey }) || null;
+          let clashStreamGuardToken = '';
 
-          // Pre-flight rate limit check (experimental)
-          if (isExperimentalEnabled('preflightRateLimit')) {
-            try {
-              const rl = await checkMessageRateLimit(acct.apiKey, acct.proxy || null);
-              if (!rl.hasCapacity) {
-                log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
-                markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);
-                continue;
-              }
-            } catch (e) {
-              log.debug(`Preflight check failed for ${acct.email}: ${e.message}`);
-            }
-          }
-
-          try { await ensureLs(acct.proxy); } catch (e) { lastErr = e; break; }
-          const ls = getLsFor(acct.proxy);
-          if (!ls) { lastErr = new Error('No LS instance available'); break; }
-          if (reuseEntry && reuseEntry.lsPort !== ls.port) {
-            log.info('Chat: cascade reuse skipped — LS port changed');
-            reuseEntry = null;
-          }
-          const _msgCharsStream = (messages || []).reduce((n, m) => {
-            const c = m?.content;
-            return n + (typeof c === 'string' ? c.length : Array.isArray(c) ? c.reduce((k, p) => k + (typeof p?.text === 'string' ? p.text.length : 0), 0) : 0);
-          }, 0);
-          log.info(`Chat: model=${model} flow=${useCascade ? 'cascade' : 'legacy'} stream=true attempt=${attempt + 1} account=${acct.email} ls=${ls.port} turns=${(messages||[]).length} chars=${_msgCharsStream}${reuseEntry ? ' reuse=1' : ''}`);
-          const client = new WindsurfClient(acct.apiKey, ls.port, ls.csrfToken);
-          let cascadeResult = null;
           try {
+            if (acct.proxy?.source === 'clash') {
+              clashStreamGuardToken = acquireClashStreamGuard({ accountId: acct.id, modelKey, reason: 'chat_stream' });
+            }
+
+            // Pre-flight rate limit check (experimental)
+            if (isExperimentalEnabled('preflightRateLimit')) {
+              try {
+                const rl = await checkMessageRateLimit(acct.apiKey, acct.proxy || null);
+                if (!rl.hasCapacity) {
+                  log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
+                  markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);
+                  continue;
+                }
+              } catch (e) {
+                log.debug(`Preflight check failed for ${acct.email}: ${e.message}`);
+              }
+            }
+
+            try { await ensureLs(acct.proxy); } catch (e) { lastErr = e; break; }
+            const ls = getLsFor(acct.proxy);
+            if (!ls) { lastErr = new Error('No LS instance available'); break; }
+            if (reuseEntry && reuseEntry.lsPort !== ls.port) {
+              log.info('Chat: cascade reuse skipped — LS port changed');
+              reuseEntry = null;
+            }
+            const _msgCharsStream = (messages || []).reduce((n, m) => {
+              const c = m?.content;
+              return n + (typeof c === 'string' ? c.length : Array.isArray(c) ? c.reduce((k, p) => k + (typeof p?.text === 'string' ? p.text.length : 0), 0) : 0);
+            }, 0);
+            log.info(`Chat: model=${model} flow=${useCascade ? 'cascade' : 'legacy'} stream=true attempt=${attempt + 1} account=${acct.email} ls=${ls.port} turns=${(messages||[]).length} chars=${_msgCharsStream}${reuseEntry ? ' reuse=1' : ''}`);
+            const client = new WindsurfClient(acct.apiKey, ls.port, ls.csrfToken);
+            let cascadeResult = null;
             if (useCascade) {
               cascadeResult = await client.cascadeChat(cascadeMessages, modelEnum, modelUid, {
                 onChunk, signal: abortController.signal, reuseEntry, toolPreamble,
@@ -810,6 +816,10 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
               continue;
             }
             break;
+          } finally {
+            if (clashStreamGuardToken) {
+              releaseClashStreamGuard(clashStreamGuardToken);
+            }
           }
         }
 
