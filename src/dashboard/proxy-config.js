@@ -5,6 +5,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { config, log } from '../config.js';
+import { getClashProxy } from '../clash.js';
 
 const PROXY_FILE = config.proxyConfigFile;
 
@@ -105,5 +106,7 @@ export function getEffectiveProxy(accountId) {
   if (accountId && _config.perAccount[accountId]) {
     return _config.perAccount[accountId];
   }
+  const clashProxy = getClashProxy();
+  if (clashProxy) return clashProxy;
   return _config.global;
 }

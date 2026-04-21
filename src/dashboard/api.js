@@ -23,6 +23,7 @@ import { MODELS, MODEL_TIER_ACCESS as _TIER_TABLE, getTierModels as _getTierMode
 import { windsurfLogin, refreshFirebaseToken, reRegisterWithCodeium } from './windsurf-login.js';
 import { getModelAccessConfig, setModelAccessMode, setModelAccessList, addModelToList, removeModelFromList } from './model-access.js';
 import { checkMessageRateLimit } from '../windsurf-api.js';
+import { getClashStatus, updateClashConfig, startClash, stopClash, restartClash, syncClashProfile } from '../clash.js';
 
 function json(res, status, body) {
   const data = JSON.stringify(body);
@@ -76,6 +77,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       startedAt: stats.startedAt,
       accounts: getAccountCount(),
       authenticated: isAuthenticated(),
+      clash: getClashStatus(),
       langServer: getLsStatus(),
       totalRequests: stats.totalRequests,
       successCount: stats.successCount,
@@ -391,6 +393,57 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
     return json(res, 200, { success: true });
   }
 
+  if (subpath === '/clash' && method === 'GET') {
+    return json(res, 200, getClashStatus(true));
+  }
+
+  if (subpath === '/clash' && method === 'PUT') {
+    try {
+      const wasRunning = getClashStatus().running;
+      updateClashConfig(body || {});
+      const clash = wasRunning ? await restartClash() : getClashStatus(true);
+      return json(res, 200, { success: true, clash });
+    } catch (err) {
+      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+    }
+  }
+
+  if (subpath === '/clash/start' && method === 'POST') {
+    try {
+      const clash = await startClash();
+      return json(res, 200, { success: true, clash });
+    } catch (err) {
+      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+    }
+  }
+
+  if (subpath === '/clash/stop' && method === 'POST') {
+    try {
+      const clash = await stopClash();
+      return json(res, 200, { success: true, clash });
+    } catch (err) {
+      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+    }
+  }
+
+  if (subpath === '/clash/restart' && method === 'POST') {
+    try {
+      const clash = await restartClash();
+      return json(res, 200, { success: true, clash });
+    } catch (err) {
+      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+    }
+  }
+
+  if (subpath === '/clash/sync' && method === 'POST') {
+    try {
+      const clash = await syncClashProfile();
+      return json(res, 200, { success: true, clash });
+    } catch (err) {
+      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+    }
+  }
+
   // ─── Config ───────────────────────────────────────────
   if (subpath === '/config' && method === 'GET') {
     return json(res, 200, {
@@ -399,6 +452,11 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       maxTokens: config.maxTokens,
       logLevel: config.logLevel,
       appDataDir: config.appDataDir,
+      clashBinaryPath: config.clashBinaryPath,
+      clashDir: config.clashDir,
+      clashProfileFile: config.clashProfileFile,
+      clashRuntimeFile: config.clashRuntimeFile,
+      clashStateFile: config.clashStateFile,
       logDir: config.logDir,
       workspaceDir: config.workspaceDir,
       windsurfHome: config.windsurfHome,
@@ -465,7 +523,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       if (!email || !password) return json(res, 400, { error: 'email 和 password 為必填' });
 
       // Use provided proxy, or global proxy
-      const proxy = loginProxy?.host ? loginProxy : getProxyConfig().global;
+      const proxy = loginProxy?.host ? loginProxy : (getEffectiveProxy() || null);
 
       const result = await windsurfLogin(email, password, proxy);
 
@@ -506,7 +564,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       const { idToken, refreshToken, email, provider, autoAdd } = body;
       if (!idToken) return json(res, 400, { error: '缺少 idToken' });
 
-      const proxy = getProxyConfig().global;
+      const proxy = getEffectiveProxy() || null;
       const { apiKey, name } = await reRegisterWithCodeium(idToken, proxy);
 
       let account = null;

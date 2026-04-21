@@ -23,6 +23,7 @@ import { handleChatCompletions } from './handlers/chat.js';
 import { handleMessages } from './handlers/messages.js';
 import { handleModels } from './handlers/models.js';
 import { handleDashboardApi } from './dashboard/api.js';
+import { getClashStatus } from './clash.js';
 import { config, log } from './config.js';
 import { getLsStatus } from './langserver.js';
 
@@ -96,6 +97,7 @@ async function route(req, res) {
   if (method === 'OPTIONS') return json(res, 204, '');
   if (path === '/health') {
     const counts = getAccountCount();
+    const clashStatus = getClashStatus();
     return json(res, 200, {
       status: 'ok',
       provider: 'WindsurfAPI bydwgx1337',
@@ -106,18 +108,26 @@ async function route(req, res) {
       branch: VERSION_INFO.branch,
       uptime: Math.round(process.uptime()),
       accounts: counts,
+      clash: {
+        enabled: clashStatus.enabled,
+        ready: clashStatus.ready,
+        effectiveTakeover: clashStatus.effectiveTakeover,
+        mixedPort: clashStatus.mixedPort,
+      },
     });
   }
   if (path === '/ready') {
     const counts = getAccountCount();
+    const clashStatus = getClashStatus();
     const lsStatus = getLsStatus();
     const defaultLs = lsStatus.instances.find(i => i.key === 'default') || null;
     const checks = {
       lsBinaryPresent: existsSync(config.lsBinaryPath),
       lsRunning: lsStatus.running,
       lsReady: !!defaultLs?.ready,
+      clashReady: !clashStatus.enabled || !clashStatus.takeoverEnabled || clashStatus.ready,
     };
-    const ready = checks.lsBinaryPresent && checks.lsRunning && checks.lsReady;
+    const ready = checks.lsBinaryPresent && checks.lsRunning && checks.lsReady && checks.clashReady;
     return json(res, ready ? 200 : 503, {
       status: ready ? 'ready' : 'not_ready',
       provider: 'WindsurfAPI bydwgx1337',
@@ -125,10 +135,19 @@ async function route(req, res) {
       uptime: Math.round(process.uptime()),
       checks,
       accounts: counts,
+      clash: {
+        enabled: clashStatus.enabled,
+        ready: clashStatus.ready,
+        running: clashStatus.running,
+        effectiveTakeover: clashStatus.effectiveTakeover,
+        mixedPort: clashStatus.mixedPort,
+      },
       paths: {
         appDataDir: config.appDataDir,
+        clashDir: config.clashDir,
         workspaceDir: config.workspaceDir,
         windsurfDataDir: config.windsurfDataDir,
+        clashBinaryPath: config.clashBinaryPath,
         lsBinaryPath: config.lsBinaryPath,
       },
     });

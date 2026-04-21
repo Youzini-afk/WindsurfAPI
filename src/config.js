@@ -5,8 +5,16 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
+const DEFAULT_CLASH_BINARY = process.platform === 'win32' ? 'mihomo.exe' : 'mihomo';
+
 function resolvePath(value, fallback) {
   return resolve(ROOT, value || fallback);
+}
+
+function parseBool(value, fallback = false) {
+  if (value == null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  return /^(1|true|yes|on)$/i.test(String(value).trim());
 }
 
 // Load .env file manually (zero dependencies)
@@ -44,6 +52,11 @@ const PROXY_CONFIG_FILE = resolvePath(process.env.PROXY_CONFIG_FILE, resolve(APP
 const MODEL_ACCESS_FILE = resolvePath(process.env.MODEL_ACCESS_FILE, resolve(APP_DATA_DIR, 'model-access.json'));
 const STATS_FILE = resolvePath(process.env.STATS_FILE, resolve(APP_DATA_DIR, 'stats.json'));
 const LOG_DIR = resolvePath(process.env.LOG_DIR, resolve(APP_DATA_DIR, 'logs'));
+const CLASH_DIR = resolvePath(process.env.CLASH_DIR, resolve(APP_DATA_DIR, 'clash'));
+const CLASH_STATE_FILE = resolvePath(process.env.CLASH_STATE_FILE, resolve(CLASH_DIR, 'state.json'));
+const CLASH_PROFILE_FILE = resolvePath(process.env.CLASH_PROFILE_FILE, resolve(CLASH_DIR, 'profile.yaml'));
+const CLASH_RUNTIME_FILE = resolvePath(process.env.CLASH_RUNTIME_FILE, resolve(CLASH_DIR, 'config.yaml'));
+const CLASH_BINARY_PATH = resolvePath(process.env.CLASH_BINARY_PATH, resolve(WINDSURF_HOME, DEFAULT_CLASH_BINARY));
 
 export const config = {
   repoRoot: ROOT,
@@ -58,6 +71,10 @@ export const config = {
   modelAccessFile: MODEL_ACCESS_FILE,
   statsFile: STATS_FILE,
   logDir: LOG_DIR,
+  clashDir: CLASH_DIR,
+  clashStateFile: CLASH_STATE_FILE,
+  clashProfileFile: CLASH_PROFILE_FILE,
+  clashRuntimeFile: CLASH_RUNTIME_FILE,
   port: parseInt(process.env.PORT || '3003', 10),
   apiKey: process.env.API_KEY || '',
 
@@ -74,6 +91,16 @@ export const config = {
   // Language server
   lsBinaryPath: LS_BINARY_PATH,
   lsPort: parseInt(process.env.LS_PORT || '42100', 10),
+
+  // Clash
+  clashEnabled: parseBool(process.env.CLASH_ENABLED, false),
+  clashAutoStart: parseBool(process.env.CLASH_AUTO_START, parseBool(process.env.CLASH_ENABLED, false)),
+  clashTakeoverEnabled: parseBool(process.env.CLASH_TAKEOVER_ENABLED, parseBool(process.env.CLASH_ENABLED, false)),
+  clashBinaryPath: CLASH_BINARY_PATH,
+  clashMixedPort: parseInt(process.env.CLASH_MIXED_PORT || '7890', 10),
+  clashSocksPort: parseInt(process.env.CLASH_SOCKS_PORT || '7891', 10),
+  clashHttpPort: parseInt(process.env.CLASH_HTTP_PORT || '7892', 10),
+  clashControllerPort: parseInt(process.env.CLASH_CONTROLLER_PORT || '9090', 10),
 
   // Dashboard
   dashboardPassword: process.env.DASHBOARD_PASSWORD || '',

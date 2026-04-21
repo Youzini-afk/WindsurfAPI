@@ -6,6 +6,7 @@
  *   Cascade → StartCascade → SendUserCascadeMessage → poll (for modelUid models)
  */
 
+import http from 'http';
 import https from 'https';
 import { randomUUID } from 'crypto';
 import { pathToFileURL } from 'url';
@@ -33,6 +34,32 @@ function contentToString(content) {
     return content.map(p => (typeof p?.text === 'string' ? p.text : JSON.stringify(p))).join('');
   }
   return content == null ? '' : JSON.stringify(content);
+}
+
+function createProxyTunnel(proxy, targetHost, targetPort) {
+  return new Promise((resolve, reject) => {
+    const proxyHost = proxy.host.replace(/:\d+$/, '');
+    const proxyPort = proxy.port || 8080;
+    const req = http.request({
+      host: proxyHost,
+      port: proxyPort,
+      method: 'CONNECT',
+      path: `${targetHost}:${targetPort}`,
+      headers: {
+        Host: `${targetHost}:${targetPort}`,
+        ...(proxy.username ? {
+          'Proxy-Authorization': `Basic ${Buffer.from(`${proxy.username}:${proxy.password || ''}`).toString('base64')}`,
+        } : {}),
+      },
+    });
+    req.on('connect', (res, socket) => {
+      if (res.statusCode === 200) resolve(socket);
+      else { socket.destroy(); reject(new Error(`Proxy CONNECT failed: ${res.statusCode}`)); }
+    });
+    req.on('error', (err) => reject(new Error(`Proxy tunnel: ${err.message}`)));
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('Proxy tunnel timeout')); });
+    req.end();
+  });
 }
 
 // ─── WindsurfClient ────────────────────────────────────────
@@ -633,10 +660,10 @@ export class WindsurfClient {
 
   // ─── Register user (JSON REST, unchanged) ────────────────
 
-  async registerUser(firebaseToken) {
+  async registerUser(firebaseToken, proxy = null) {
     return new Promise((resolve, reject) => {
       const postData = JSON.stringify({ firebase_id_token: firebaseToken });
-      const req = https.request({
+      const requestOpts = {
         hostname: 'api.codeium.com',
         port: 443,
         path: '/register_user/',
@@ -645,7 +672,8 @@ export class WindsurfClient {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(postData),
         },
-      }, (res) => {
+      };
+      const handleResponse = (res) => {
         let raw = '';
         res.on('data', d => raw += d);
         res.on('end', () => {
@@ -665,10 +693,25 @@ export class WindsurfClient {
           }
         });
         res.on('error', reject);
-      });
-      req.on('error', reject);
-      req.write(postData);
-      req.end();
+      };
+      (async () => {
+        try {
+          let req;
+          if (proxy && proxy.host) {
+            const socket = await createProxyTunnel(proxy, 'api.codeium.com', 443);
+            requestOpts.socket = socket;
+            requestOpts.agent = false;
+            req = https.request(requestOpts, handleResponse);
+          } else {
+            req = https.request(requestOpts, handleResponse);
+          }
+          req.on('error', reject);
+          req.write(postData);
+          req.end();
+        } catch (err) {
+          reject(err);
+        }
+      })();
     });
   }
 

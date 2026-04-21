@@ -1,6 +1,7 @@
 // Logger must be imported first to patch log functions before other modules use them
 import './dashboard/logger.js';
 import { initAuth, isAuthenticated, saveAccountsSync } from './auth.js';
+import { initClash, shutdownClash } from './clash.js';
 import { startLanguageServer, waitForReady, isLanguageServerRunning, stopLanguageServer } from './langserver.js';
 import { startServer } from './server.js';
 import { config, log } from './config.js';
@@ -35,6 +36,7 @@ async function main() {
   try {
     mkdirSync(config.appDataDir, { recursive: true });
     mkdirSync(config.logDir, { recursive: true });
+    mkdirSync(config.clashDir, { recursive: true });
     mkdirSync(config.windsurfDataDir, { recursive: true });
     mkdirSync(join(config.windsurfDataDir, 'db'), { recursive: true });
     mkdirSync(config.workspaceDir, { recursive: true });
@@ -42,6 +44,7 @@ async function main() {
       rmSync(join(config.workspaceDir, entry), { recursive: true, force: true });
     }
   } catch {}
+  await initClash();
   if (existsSync(binaryPath)) {
     await startLanguageServer({
       binaryPath,
@@ -84,12 +87,14 @@ async function main() {
       // counts, rate-limit cooldowns) before PM2 restarts us. Debounced
       // saves would otherwise be killed by the exit below.
       try { saveAccountsSync(); } catch {}
+      try { shutdownClash(); } catch {}
       try { stopLanguageServer(); } catch {}
       process.exit(0);
     });
     setTimeout(() => {
       log.warn('Drain timeout, forcing exit');
       try { saveAccountsSync(); } catch {}
+      try { shutdownClash(); } catch {}
       try { stopLanguageServer(); } catch {}
       process.exit(0);
     }, 30_000);

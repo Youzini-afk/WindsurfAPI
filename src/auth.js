@@ -152,7 +152,7 @@ async function fetchAndMergeModelCatalog() {
 async function registerWithCodeium(idToken) {
   const { WindsurfClient } = await import('./client.js');
   const client = new WindsurfClient('', 0, '');
-  const result = await client.registerUser(idToken);
+  const result = await client.registerUser(idToken, getEffectiveProxy() || null);
   return result; // { apiKey, name, apiServerUrl }
 }
 
