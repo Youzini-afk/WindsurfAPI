@@ -3071,9 +3071,21 @@ const App = {
     summaryEl.textContent = `共 ${this.clashGroups.length} 个策略组，当前查看：${group.name}`;
     currentEl.textContent = group.now || '-';
     countEl.textContent = String((group.all || []).length);
-    nodeListEl.innerHTML = (group.all || []).map(nodeName => `
-      <button class="btn ${group.now === nodeName ? 'btn-primary' : 'btn-outline'}" style="justify-content:flex-start;text-align:left;word-break:break-all" onclick="App.selectClashNode('${this.escJsAttr(nodeName)}')">${this.esc(nodeName)}</button>
-    `).join('') || '<div class="card text-sm text-muted">当前没有可展示的节点</div>';
+    const delayMap = new Map((this.clashDelayResults || []).map(item => [item.name, item]));
+    nodeListEl.innerHTML = (group.all || []).map(nodeName => {
+      const delayItem = delayMap.get(nodeName) || null;
+      const delayText = delayItem
+        ? (delayItem.delay != null ? `${this.esc(String(delayItem.delay))} ms` : '失败')
+        : '';
+      const delayColor = delayItem
+        ? (delayItem.delay != null ? 'var(--success)' : 'var(--error)')
+        : 'var(--muted)';
+      return `
+      <button class="btn ${group.now === nodeName ? 'btn-primary' : 'btn-outline'}" style="display:flex;justify-content:space-between;gap:12px;align-items:center;text-align:left" onclick="App.selectClashNode('${this.escJsAttr(nodeName)}')">
+        <span style="flex:1;word-break:break-all">${this.esc(nodeName)}</span>
+        ${delayText ? `<span style="font-size:12px;color:${delayColor};white-space:nowrap">${delayText}</span>` : ''}
+      </button>`;
+    }).join('') || '<div class="card text-sm text-muted">当前没有可展示的节点</div>';
   },
 
   renderClashDelayResults() {
@@ -3081,17 +3093,15 @@ const App = {
     const resultsEl = document.getElementById('clash-delay-results');
     if (!summaryEl || !resultsEl) return;
     if (!this.clashDelayResults.length) {
-      summaryEl.textContent = '测速结果会显示在这里';
-      resultsEl.innerHTML = '<div class="card text-sm text-muted">尚未执行测速</div>';
+      summaryEl.textContent = '点击“测速”后会直接把结果写到节点按钮上';
+      resultsEl.style.display = 'none';
+      resultsEl.innerHTML = '';
       return;
     }
-    summaryEl.textContent = `测速 URL：${this.clashData?.testUrl || 'https://www.gstatic.com/generate_204'} · 共 ${this.clashDelayResults.length} 条结果`;
-    resultsEl.innerHTML = this.clashDelayResults.map(item => `
-      <div class="card" style="display:flex;justify-content:space-between;gap:12px;align-items:center">
-        <div style="flex:1;word-break:break-all">${this.esc(item.name)}</div>
-        <div style="font-weight:600;color:${item.delay != null ? 'var(--success)' : 'var(--error)'}">${item.delay != null ? `${this.esc(String(item.delay))} ms` : '失败'}</div>
-      </div>
-    `).join('');
+    const successCount = this.clashDelayResults.filter(item => item.delay != null).length;
+    summaryEl.textContent = `测速完成，已写入节点按钮 · 成功 ${successCount}/${this.clashDelayResults.length}`;
+    resultsEl.style.display = 'none';
+    resultsEl.innerHTML = '';
   },
 
   renderClashLogs() {
@@ -3180,6 +3190,7 @@ const App = {
     const r = await this.api('POST', '/clash/delay-test', { groupName: this.clashSelectedGroup });
     if (r.error) return this.toast(r.error, 'error');
     this.clashDelayResults = r.result?.results || [];
+    this.renderClashGroups();
     this.renderClashDelayResults();
     this.toast('测速完成');
   },
