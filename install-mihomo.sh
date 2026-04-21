@@ -2,15 +2,16 @@
 set -euo pipefail
 
 TARGET="${CLASH_INSTALL_PATH:-/opt/windsurf/mihomo}"
-BASE_URL='https://github.com/MetaCubeX/mihomo/releases/latest/download'
+VERSION_URL='https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt'
+BASE_URL='https://github.com/MetaCubeX/mihomo/releases/download'
 
 log() { echo -e "\033[1;34m==>\033[0m $*"; }
 err() { echo -e "\033[1;31m!!\033[0m  $*" >&2; }
 
 arch="$(uname -m)"
 case "$arch" in
-  x86_64|amd64)  ASSET='mihomo-linux-amd64-v2.gz' ;;
-  aarch64|arm64) ASSET='mihomo-linux-arm64.gz' ;;
+  x86_64|amd64)  ASSET='mihomo-linux-amd64-v2' ;;
+  aarch64|arm64) ASSET='mihomo-linux-arm64' ;;
   *) err "Unsupported arch: $arch"; exit 1 ;;
 esac
 
@@ -22,6 +23,16 @@ trap cleanup EXIT
 install_from_gzip() {
   local src="$1"
   gzip -dc "$src" > "$TARGET"
+}
+
+get_latest_version() {
+  local version
+  version="$(curl -fsSL "$VERSION_URL" | tr -d '\r\n')"
+  if [[ -z "$version" ]]; then
+    err "Could not resolve latest Mihomo version from $VERSION_URL"
+    exit 1
+  fi
+  printf '%s' "$version"
 }
 
 if [[ $# -gt 0 && "$1" != "--url" && -f "$1" ]]; then
@@ -41,7 +52,8 @@ elif [[ $# -ge 2 && "$1" == "--url" ]]; then
     cp -f "$tmp" "$TARGET"
   fi
 else
-  url="$BASE_URL/$ASSET"
+  version="$(get_latest_version)"
+  url="$BASE_URL/$version/$ASSET-$version.gz"
   log "Downloading Mihomo asset: $url"
   curl -fL --progress-bar -o "$tmp" "$url"
   install_from_gzip "$tmp"
