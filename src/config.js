@@ -104,6 +104,7 @@ export const config = {
 
   // Dashboard
   dashboardPassword: process.env.DASHBOARD_PASSWORD || '',
+  maskAllErrorMessages: parseBool(process.env.MASK_ALL_ERROR_MESSAGES, true),
 };
 
 const levels = { debug: 0, info: 1, warn: 2, error: 3 };

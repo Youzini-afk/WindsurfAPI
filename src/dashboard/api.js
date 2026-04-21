@@ -24,9 +24,10 @@ import { windsurfLogin, refreshFirebaseToken, reRegisterWithCodeium } from './wi
 import { getModelAccessConfig, setModelAccessMode, setModelAccessList, addModelToList, removeModelFromList } from './model-access.js';
 import { checkMessageRateLimit } from '../windsurf-api.js';
 import { getClashStatus, getClashDashboardState, updateClashConfig, startClash, stopClash, restartClash, syncClashProfile, selectClashProxy, testClashGroupDelays, getClashLogs } from '../clash.js';
+import { maskErrorPayload } from '../error-mask.js';
 
 function json(res, status, body) {
-  const data = JSON.stringify(body);
+  const data = JSON.stringify(maskErrorPayload(body));
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',

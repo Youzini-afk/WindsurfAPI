@@ -24,6 +24,7 @@ import { handleMessages } from './handlers/messages.js';
 import { handleModels } from './handlers/models.js';
 import { handleDashboardApi } from './dashboard/api.js';
 import { getClashStatus } from './clash.js';
+import { maskErrorPayload } from './error-mask.js';
 import { config, log } from './config.js';
 import { getLsStatus } from './langserver.js';
 
@@ -80,7 +81,7 @@ function extractToken(req) {
 }
 
 function json(res, status, body) {
-  const data = JSON.stringify(body);
+  const data = JSON.stringify(maskErrorPayload(body));
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',

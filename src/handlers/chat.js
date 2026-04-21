@@ -23,6 +23,7 @@ import {
   buildToolPreambleForProto,
 } from './tool-emulation.js';
 import { sanitizeText, PathSanitizeStream } from '../sanitize.js';
+import { maskErrorMessage } from '../error-mask.js';
 
 const HEARTBEAT_MS = 15_000;
 const QUEUE_RETRY_MS = 1_000;
@@ -255,7 +256,7 @@ export async function handleChatCompletions(body) {
   //
   // Tool-emulation mode bypasses the reuse pool: fingerprint can't stably
   // collapse a conversation whose assistant turns contain synthesised
-  // <tool_call> markup and whose user turns contain <tool_result> wrappers.
+  //  markup and whose user turns contain <tool_result> wrappers.
   const reuseEnabled = useCascade && !emulateTools && isExperimentalEnabled('cascadeConversationReuse');
   const fpBefore = reuseEnabled ? fingerprintBefore(messages) : null;
   let reuseEntry = reuseEnabled ? poolCheckout(fpBefore) : null;
@@ -370,7 +371,7 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
       }
       cascadeMeta = { cascadeId: chunks.cascadeId, sessionId: chunks.sessionId };
       serverUsage = chunks.usage || null;
-      // Always strip <tool_call>/<tool_result> blocks from Cascade text.
+      // Always strip  tool_result blocks from Cascade text.
       // - emulateTools=true: parsed tool_calls become OpenAI-format tool_calls.
       // - emulateTools=false: blocks are silently discarded (defense-in-depth
       //   against Cascade's system prompt inducing tool markup even after we
@@ -440,7 +441,7 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
       }));
       // OpenAI convention: content is null when finish_reason is tool_calls.
       // In text emulation the model often emits an inline answer alongside the
-      // <tool_call> block (e.g., hallucinated weather data). Set content to
+      //  block (e.g., hallucinated weather data). Set content to
       // null so clients that check `content !== null` behave correctly and the
       // caller waits for the real tool result rather than showing hallucinated
       // data.
@@ -502,7 +503,7 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
     }
     return {
       status: err.isModelError ? 403 : 502,
-      body: { error: { message: sanitizeText(err.message), type: err.isModelError ? 'model_not_available' : 'upstream_error' } },
+      body: { error: { message: maskErrorMessage(sanitizeText(err.message)), type: err.isModelError ? 'model_not_available' : 'upstream_error' } },
     };
   }
 }
@@ -584,20 +585,20 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
 
       // Cascade conversation pool (experimental, stream path) — bypassed in
       // tool-emulation mode because the fingerprint can't collapse turns
-      // whose bodies carry <tool_call>/<tool_result> markup.
+      // whose bodies carry  tool_result markup.
       const reuseEnabled = useCascade && !emulateTools && isExperimentalEnabled('cascadeConversationReuse');
       const fpBefore = reuseEnabled ? fingerprintBefore(messages) : null;
       let reuseEntry = reuseEnabled ? poolCheckout(fpBefore) : null;
       if (reuseEntry) log.info(`Chat: cascade reuse HIT cascadeId=${reuseEntry.cascadeId.slice(0, 8)}… stream model=${model}`);
 
-      // Always strip <tool_call>/<tool_result> blocks in Cascade mode.
+      // Always strip  tool_result blocks in Cascade mode.
       // In emulation mode, parsed calls are emitted as OpenAI tool_calls.
       // In non-emulation mode, blocks are silently stripped (defense-in-depth
       // against Cascade's system prompt inducing tool markup).
       //
       // These are re-created at the start of each retry attempt (before the
       // first chunk is consumed) so stale buffers from a failed attempt —
-      // e.g. a half-read `<tool_call>` tag — can't corrupt the next
+      // e.g. a half-read  tag — can't corrupt the next
       // account's stream. `let` bindings so the retry loop below can
       // reassign.
       let toolParser = useCascade ? new ToolCallStreamParser() : null;
@@ -645,7 +646,7 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
 
         if (chunk.text) {
           // Pipeline for text deltas:
-          //   raw chunk  →  ToolCallStreamParser (strip <tool_call> blocks)
+          //   raw chunk  →  ToolCallStreamParser (strip  blocks)
           //              →  PathSanitizeStream   (scrub server paths)
           //              →  client
           let safeText = chunk.text;
@@ -674,7 +675,7 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           if (abortController.signal.aborted) return;
           // Rebuild per-attempt stream state so a prior failure's residue
-          // (partial <tool_call>, half-scrubbed path) can't leak into the
+          // (partial , half-scrubbed path) can't leak into the
           // retry. Skip on attempt 0 — already fresh. hadSuccess=true
           // means we already emitted content so no retry happens anyway.
           if (attempt > 0 && !hadSuccess) {
@@ -736,7 +737,7 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
             }
             // Flush order matters:
             //   1. ToolCallStreamParser tail → may produce more text deltas
-            //      (e.g., a dangling <tool_call> that never closed falls
+            //      (e.g., a dangling  that never closed falls
             //      through as literal text)
             //   2. PathSanitizeStream tail (text) → scrubs anything the tool
             //      parser held back AND anything we were holding ourselves
@@ -817,9 +818,10 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
         recordRequest(model, false, Date.now() - startTime, currentApiKey);
         try {
           const rl = isAllRateLimited(modelKey);
-          const errMsg = rl.allLimited
+          const rawErrMsg = rl.allLimited
             ? `${model} 所有账号均已达速率限制，请 ${Math.ceil(rl.retryAfterMs / 1000)} 秒后重试`
             : sanitizeText(lastErr?.message || 'no accounts');
+          const publicErrMsg = maskErrorMessage(rawErrMsg);
 
           if (hadSuccess) {
             // We already streamed real assistant content. Injecting
@@ -830,14 +832,14 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
             // go to the server log.
             send({ id, object: 'chat.completion.chunk', created, model,
               choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
-            log.warn(`Stream: partial response delivered then failed (${errMsg})`);
+            log.warn(`Stream: partial response delivered then failed (${rawErrMsg})`);
           } else {
             if (!rolePrinted) {
               send({ id, object: 'chat.completion.chunk', created, model,
                 choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
             }
             send({ id, object: 'chat.completion.chunk', created, model,
-              choices: [{ index: 0, delta: { content: `\n[Error: ${errMsg}]` }, finish_reason: 'stop' }] });
+              choices: [{ index: 0, delta: { content: `\n[Error: ${publicErrMsg}]` }, finish_reason: 'stop' }] });
           }
           res.write('data: [DONE]\n\n');
         } catch {}
