@@ -1379,34 +1379,15 @@ window._firebaseOAuth = async function(provider) {
     <div class="page-header">
       <div>
         <h1 class="page-title" data-i18n="page.clash">内置 Clash</h1>
-        <div class="page-subtitle">管理内置 Mihomo sidecar，并在运行时接管服务默认出站流量</div>
+        <div class="page-subtitle">按 openai-cpa 的方式管理内置 Mihomo：订阅导入、统一策略组、节点切换、测速和日志</div>
       </div>
     </div>
 
     <div class="section">
       <div class="section-header">
         <div>
-          <div class="section-title">运行状态</div>
-          <div class="section-desc">查看 sidecar 当前状态、是否接管出站、以及本地监听端口</div>
-        </div>
-      </div>
-      <div class="section-body">
-        <div id="clash-status-summary" class="text-sm text-muted">未加载</div>
-        <pre id="clash-status-meta" style="margin-top:12px;font-size:12px;max-height:220px;overflow:auto;padding:12px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border);white-space:pre-wrap"></pre>
-        <div class="field-row-actions">
-          <button class="btn btn-primary" onclick="App.startClash()">启动</button>
-          <button class="btn btn-outline" onclick="App.restartClash()">重启</button>
-          <button class="btn btn-outline" onclick="App.stopClash()">停止</button>
-          <button class="btn btn-ghost" onclick="App.refreshClashStatus()">刷新状态</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-header">
-        <div>
-          <div class="section-title">运行参数</div>
-          <div class="section-desc">保存后如果 sidecar 正在运行会自动重启。接管启用时，现有默认出站将优先走本地 Clash mixed-port。</div>
+          <div class="section-title">订阅与核心控制</div>
+          <div class="section-desc">订阅地址是主入口。导入后会自动生成 Mihomo 配置，并固定生成“自动选择 / 节点选择”两层策略组。</div>
         </div>
       </div>
       <div class="section-body">
@@ -1443,40 +1424,92 @@ window._firebaseOAuth = async function(provider) {
         </div>
         <div class="field-row mt-3">
           <div class="field" style="flex:2">
-            <label class="field-label">订阅地址（可选）</label>
-            <input id="clash-profile-url" class="input" placeholder="https://example.com/profile.yaml">
+            <label class="field-label">订阅地址</label>
+            <input id="clash-subscription-url" class="input" placeholder="https://example.com/subscription?target=clash">
+          </div>
+          <div class="field" style="max-width:160px">
+            <label class="field-label">更新间隔（分钟）</label>
+            <input id="clash-update-interval" class="input" type="number" placeholder="60">
+          </div>
+          <div class="field" style="max-width:140px">
+            <label class="field-label">日志行数</label>
+            <input id="clash-log-lines" class="input" type="number" placeholder="200">
           </div>
         </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-header">
-        <div>
-          <div class="section-title">Profile 配置</div>
-          <div class="section-desc">粘贴完整的 Mihomo YAML。若同时填写订阅地址，可点“同步订阅”覆盖当前内容。</div>
+        <div class="field-row mt-3">
+          <div class="field" style="max-width:180px">
+            <label class="field-label">默认策略组</label>
+            <input id="clash-group-name" class="input" placeholder="节点选择">
+          </div>
+          <div class="field" style="flex:2">
+            <label class="field-label">测速 URL</label>
+            <input id="clash-test-url" class="input" placeholder="https://www.gstatic.com/generate_204">
+          </div>
+          <div class="field" style="flex:1">
+            <label class="field-label">Controller Secret</label>
+            <input id="clash-secret" class="input" placeholder="可选">
+          </div>
         </div>
-      </div>
-      <div class="section-body">
-        <textarea id="clash-profile-body" class="input" style="width:100%;min-height:320px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.5" placeholder="proxies:\n  - name: example\n    type: http\n    server: 1.2.3.4\n    port: 443"></textarea>
         <div class="field-row-actions">
-          <button class="btn btn-primary" onclick="App.saveClash()">保存本地配置</button>
-          <button class="btn btn-outline" onclick="App.syncClashProfile()">导入 / 刷新订阅</button>
+          <button class="btn btn-primary" onclick="App.importClashSubscription()">导入订阅</button>
+          <button class="btn btn-outline" onclick="App.updateClashSubscription()">更新订阅</button>
+          <button class="btn btn-outline" onclick="App.startClash()">启动</button>
+          <button class="btn btn-outline" onclick="App.restartClash()">重启</button>
+          <button class="btn btn-outline" onclick="App.stopClash()">停止</button>
+          <button class="btn btn-ghost" onclick="App.refreshClashStatus(true)">刷新状态</button>
         </div>
-        <div id="clash-subscription-summary" class="text-sm text-muted" style="margin-top:10px">未导入订阅</div>
+        <div id="clash-status-summary" class="text-sm text-muted" style="margin-top:10px">未加载</div>
+        <div class="metrics-grid" style="margin-top:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+          <div class="card"><div class="text-sm text-muted">生效代理</div><div id="clash-effective-proxy" style="margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all">-</div></div>
+          <div class="card"><div class="text-sm text-muted">控制器</div><div id="clash-controller-url" style="margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all">-</div></div>
+          <div class="card"><div class="text-sm text-muted">当前节点</div><div id="clash-current-node" style="margin-top:6px;font-weight:600;word-break:break-all">-</div></div>
+          <div class="card"><div class="text-sm text-muted">策略组数</div><div id="clash-groups-count" style="margin-top:6px;font-weight:600">0</div></div>
+          <div class="card"><div class="text-sm text-muted">最近错误</div><div id="clash-last-error" style="margin-top:6px;font-size:12px;word-break:break-all">无</div></div>
+        </div>
       </div>
     </div>
 
     <div class="section">
       <div class="section-header">
         <div>
-          <div class="section-title">代理组 / 节点选择</div>
-          <div class="section-desc">启动并加载订阅后，这里会显示 Mihomo 当前代理组和可选节点。切换后会立即应用，并依赖 Mihomo 的 store-selected 持久化选择。</div>
+          <div class="section-title">策略组与节点</div>
+          <div class="section-desc">先选策略组，再直接点击节点按钮切换。测速结果和当前节点会围绕所选策略组展示。</div>
         </div>
       </div>
       <div class="section-body">
-        <div id="clash-groups-summary" class="text-sm text-muted">启动并成功加载订阅后可在此选节点</div>
-        <div id="clash-proxy-groups" style="display:grid;gap:12px;margin-top:12px"></div>
+        <div class="field-row-actions">
+          <select id="clash-selected-group" class="select" style="min-width:260px;max-width:360px" onchange="App.changeClashGroup(this.value)">
+            <option value="">选择策略组</option>
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="App.runClashDelayTest()">测速</button>
+          <span id="clash-groups-summary" class="text-sm text-muted" style="margin-left:auto">启动并成功加载订阅后可在此选节点</span>
+        </div>
+        <div class="metrics-grid" style="margin-top:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+          <div class="card"><div class="text-sm text-muted">选中策略组当前节点</div><div id="clash-selected-group-current" style="margin-top:6px;font-weight:600;word-break:break-all">-</div></div>
+          <div class="card"><div class="text-sm text-muted">候选节点数量</div><div id="clash-selected-group-count" style="margin-top:6px;font-weight:600">0</div></div>
+        </div>
+        <div id="clash-node-list" style="display:grid;gap:10px;margin-top:14px"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <div class="section-title">测速与日志</div>
+          <div class="section-desc">测速用于给当前策略组候选节点排序；右侧日志直接展示 Mihomo 本地日志尾部。</div>
+        </div>
+      </div>
+      <div class="section-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+          <div>
+            <div id="clash-delay-summary" class="text-sm text-muted">测速结果会显示在这里</div>
+            <div id="clash-delay-results" style="display:grid;gap:10px;margin-top:12px"></div>
+          </div>
+          <div>
+            <div id="clash-log-summary" class="text-sm text-muted">Mihomo 日志尾部</div>
+            <textarea id="clash-log-output" readonly class="input" style="width:100%;min-height:280px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.5;margin-top:12px"></textarea>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -1754,6 +1787,11 @@ const App = {
   pollers: {},
   allModels: [],
   modelAccessConfig: { mode: 'all', list: [] },
+  clashData: null,
+  clashGroups: [],
+  clashSelectedGroup: '',
+  clashDelayResults: [],
+  clashLogs: [],
   loginHistory: JSON.parse(localStorage.getItem('wl_history') || '[]'),
   _filterTimer: null,
 
@@ -2927,39 +2965,60 @@ const App = {
 
   async loadClash() {
     const d = await this.api('GET', '/clash');
+    this.applyClashData(d);
+    await this.loadClashLogs();
+    this.poll('clash', () => this.refreshClashStatus(), 10000);
+  },
+
+  applyClashData(d = {}) {
+    this.clashData = d || {};
+    this.clashGroups = Array.isArray(d.groups) ? d.groups : [];
+    const groupNames = this.clashGroups.map(group => group.name);
+    this.clashSelectedGroup = (this.clashSelectedGroup && groupNames.includes(this.clashSelectedGroup))
+      ? this.clashSelectedGroup
+      : (d.selectedGroup || groupNames[0] || '');
     document.getElementById('clash-enabled').checked = !!d.enabled;
     document.getElementById('clash-auto-start').checked = !!d.autoStart;
     document.getElementById('clash-takeover-enabled').checked = !!d.takeoverEnabled;
     document.getElementById('clash-binary-path').value = d.binaryPath || '';
     document.getElementById('clash-mixed-port').value = d.mixedPort || 7890;
     document.getElementById('clash-controller-port').value = d.controllerPort || 9090;
-    document.getElementById('clash-profile-url').value = d.profileUrl || '';
-    document.getElementById('clash-profile-body').value = d.profileBody || '';
-    this.renderClashStatus(d);
-    this.renderClashSubscription(d);
-    this.renderClashProxyGroups(d);
-    this.poll('clash', () => this.refreshClashStatus(), 10000);
+    document.getElementById('clash-subscription-url').value = d.subscriptionUrl || d.profileUrl || '';
+    document.getElementById('clash-update-interval').value = d.updateIntervalMinutes || 60;
+    document.getElementById('clash-log-lines').value = d.logLines || 200;
+    document.getElementById('clash-group-name').value = d.groupName || '节点选择';
+    document.getElementById('clash-test-url').value = d.testUrl || 'https://www.gstatic.com/generate_204';
+    document.getElementById('clash-secret').value = d.secret || '';
+    this.renderClashStatus();
+    this.renderClashGroups();
+    this.renderClashDelayResults();
   },
 
-  collectClashForm(options = {}) {
-    const body = {
+  collectClashForm() {
+    return {
       enabled: document.getElementById('clash-enabled').checked,
       autoStart: document.getElementById('clash-auto-start').checked,
       takeoverEnabled: document.getElementById('clash-takeover-enabled').checked,
       binaryPath: document.getElementById('clash-binary-path').value.trim(),
       mixedPort: parseInt(document.getElementById('clash-mixed-port').value, 10) || 7890,
       controllerPort: parseInt(document.getElementById('clash-controller-port').value, 10) || 9090,
-      profileUrl: document.getElementById('clash-profile-url').value.trim(),
+      subscriptionUrl: document.getElementById('clash-subscription-url').value.trim(),
+      groupName: document.getElementById('clash-group-name').value.trim() || '节点选择',
+      testUrl: document.getElementById('clash-test-url').value.trim() || 'https://www.gstatic.com/generate_204',
+      updateIntervalMinutes: parseInt(document.getElementById('clash-update-interval').value, 10) || 60,
+      logLines: parseInt(document.getElementById('clash-log-lines').value, 10) || 200,
+      secret: document.getElementById('clash-secret').value.trim(),
     };
-    const profileBody = document.getElementById('clash-profile-body').value;
-    if (options.includeProfileBody || profileBody.trim()) body.profileBody = profileBody;
-    return body;
   },
 
-  renderClashStatus(d) {
+  getSelectedClashGroup() {
+    return (this.clashGroups || []).find(group => group.name === this.clashSelectedGroup) || null;
+  },
+
+  renderClashStatus() {
+    const d = this.clashData || {};
     const statusEl = document.getElementById('clash-status-summary');
-    const metaEl = document.getElementById('clash-status-meta');
-    if (!statusEl || !metaEl) return;
+    if (!statusEl) return;
     const running = d.running
       ? (d.ready ? '<span style="color:var(--success)">运行中</span>' : '<span style="color:var(--warning)">启动中</span>')
       : '<span class="text-sm text-dim">未运行</span>';
@@ -2967,145 +3026,162 @@ const App = {
       ? '<span style="color:var(--accent)">已接管</span>'
       : '<span class="text-sm text-dim">未接管</span>';
     const version = d.controllerVersion?.version ? ` · 版本：<code>${this.esc(String(d.controllerVersion.version))}</code>` : '';
-    statusEl.innerHTML = `状态：${running} · 接管：${takeover} · 代理：<code>127.0.0.1:${this.esc(String(d.mixedPort || ''))}</code>${version}`;
-    metaEl.textContent = JSON.stringify({
-      running: !!d.running,
-      ready: !!d.ready,
-      pid: d.pid || null,
-      startedAt: d.startedAt || 0,
-      enabled: !!d.enabled,
-      autoStart: !!d.autoStart,
-      takeoverEnabled: !!d.takeoverEnabled,
-      lastSyncAt: d.lastSyncAt || 0,
-      lastExit: d.lastExit || null,
-      hasProfile: !!d.hasProfile,
-      binaryPath: d.binaryPath || '',
-      profileFile: d.profileFile || '',
-      runtimeFile: d.runtimeFile || '',
-      stateFile: d.stateFile || '',
-      lastError: d.lastError || '',
-      controllerVersion: d.controllerVersion || null,
-      proxyGroupCount: Array.isArray(d.proxyGroups) ? d.proxyGroups.length : 0,
-      proxyGroupsError: d.proxyGroupsError || '',
-    }, null, 2);
+    const syncText = d.lastSyncAt ? ` · 上次更新：${this.esc(new Date(d.lastSyncAt).toLocaleString())}` : '';
+    statusEl.innerHTML = `状态：${running} · 接管：${takeover} · 订阅：${d.subscriptionConfigured ? '已配置' : '未配置'}${syncText}${version}`;
+    document.getElementById('clash-effective-proxy').textContent = d.mixedProxyUrl || '-';
+    document.getElementById('clash-controller-url').textContent = d.controllerUrl || '-';
+    document.getElementById('clash-current-node').textContent = d.currentProxy || '-';
+    document.getElementById('clash-groups-count').textContent = String(d.groupsCount || 0);
+    const lastErrorEl = document.getElementById('clash-last-error');
+    lastErrorEl.textContent = d.lastError || '无';
+    lastErrorEl.style.color = d.lastError ? 'var(--error)' : 'var(--muted)';
   },
 
-  renderClashSubscription(d) {
-    const el = document.getElementById('clash-subscription-summary');
-    if (!el) return;
-    const parts = [];
-    parts.push(d.profileUrl ? `订阅地址：${this.esc(d.profileUrl)}` : '未设置订阅地址');
-    parts.push(d.hasProfile ? '本地 Profile 已存在' : '尚未导入本地 Profile');
-    if (d.lastSyncAt) parts.push(`上次同步：${this.esc(new Date(d.lastSyncAt).toLocaleString())}`);
-    if (Array.isArray(d.proxyGroups) && d.proxyGroups.length) parts.push(`代理组：${d.proxyGroups.length}`);
-    if (d.proxyGroupsError) parts.push(`节点读取失败：${this.esc(d.proxyGroupsError)}`);
-    el.innerHTML = parts.join(' · ');
-  },
-
-  renderClashProxyGroups(d) {
+  renderClashGroups() {
+    const d = this.clashData || {};
     const summaryEl = document.getElementById('clash-groups-summary');
-    const container = document.getElementById('clash-proxy-groups');
-    if (!summaryEl || !container) return;
+    const selectEl = document.getElementById('clash-selected-group');
+    const currentEl = document.getElementById('clash-selected-group-current');
+    const countEl = document.getElementById('clash-selected-group-count');
+    const nodeListEl = document.getElementById('clash-node-list');
+    if (!summaryEl || !selectEl || !currentEl || !countEl || !nodeListEl) return;
+    selectEl.innerHTML = '<option value="">选择策略组</option>' + (this.clashGroups || []).map(group => `<option value="${this.esc(group.name)}" ${group.name === this.clashSelectedGroup ? 'selected' : ''}>${this.esc(group.name)}</option>`).join('');
     if (!d.running || !d.ready) {
-      summaryEl.textContent = d.hasProfile ? '订阅已准备，启动 Clash 后即可选择节点' : '请先导入订阅并启动 Clash';
-      container.innerHTML = '';
+      summaryEl.textContent = d.subscriptionConfigured ? '订阅已保存，启动 Clash 后即可选择节点' : '请先导入订阅';
+      currentEl.textContent = '-';
+      countEl.textContent = '0';
+      nodeListEl.innerHTML = '<div class="card text-sm text-muted">当前没有可展示的节点</div>';
       return;
     }
-    const groups = Array.isArray(d.proxyGroups) ? d.proxyGroups : [];
-    if (d.proxyGroupsError) {
-      summaryEl.textContent = `节点读取失败：${d.proxyGroupsError}`;
-      container.innerHTML = '';
+    if (d.groupsError) {
+      summaryEl.textContent = `节点读取失败：${d.groupsError}`;
+      currentEl.textContent = '-';
+      countEl.textContent = '0';
+      nodeListEl.innerHTML = '<div class="card text-sm text-muted">当前没有可展示的节点</div>';
       return;
     }
-    if (!groups.length) {
-      summaryEl.textContent = '当前没有可选的代理组，可能是订阅尚未加载完成或配置里没有 selector/url-test/fallback 组';
-      container.innerHTML = '';
+    const group = this.getSelectedClashGroup();
+    if (!group) {
+      summaryEl.textContent = '当前没有可选的策略组，请稍后刷新或检查订阅内容';
+      currentEl.textContent = '-';
+      countEl.textContent = '0';
+      nodeListEl.innerHTML = '<div class="card text-sm text-muted">当前没有可展示的节点</div>';
       return;
     }
-    summaryEl.textContent = `共 ${groups.length} 个代理组，切换后会即时应用。`;
-    container.innerHTML = groups.map((group, index) => {
-      const selectId = `clash-group-select-${index}`;
-      const options = (group.options || []).map((option) => {
-        const badges = [option.type || ''];
-        if (option.alive === true) badges.push('在线');
-        if (option.alive === false) badges.push('离线');
-        if (typeof option.delay === 'number' && option.delay >= 0) badges.push(`${option.delay}ms`);
-        const label = badges.filter(Boolean).length ? `${option.name} (${badges.filter(Boolean).join(' · ')})` : option.name;
-        return `<option value="${this.esc(option.name)}" ${option.name === group.current ? 'selected' : ''}>${this.esc(label)}</option>`;
-      }).join('');
-      return `
-        <div style="border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--surface-1)">
-          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-            <div>
-              <div style="font-weight:600">${this.esc(group.name)}</div>
-              <div class="text-sm text-muted">类型：${this.esc(group.type || '-')} · 当前：<code>${this.esc(group.current || '-')}</code> · 选项：${this.esc(String(group.optionCount || 0))}</div>
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <select id="${selectId}" class="select" style="min-width:280px;flex:1">${options}</select>
-            <button class="btn btn-primary btn-sm" onclick="App.selectClashNode('${this.escJsAttr(group.name)}','${selectId}')">切换节点</button>
-          </div>
-        </div>`;
-    }).join('');
+    summaryEl.textContent = `共 ${this.clashGroups.length} 个策略组，当前查看：${group.name}`;
+    currentEl.textContent = group.now || '-';
+    countEl.textContent = String((group.all || []).length);
+    nodeListEl.innerHTML = (group.all || []).map(nodeName => `
+      <button class="btn ${group.now === nodeName ? 'btn-primary' : 'btn-outline'}" style="justify-content:flex-start;text-align:left;word-break:break-all" onclick="App.selectClashNode('${this.escJsAttr(nodeName)}')">${this.esc(nodeName)}</button>
+    `).join('') || '<div class="card text-sm text-muted">当前没有可展示的节点</div>';
   },
 
-  async selectClashNode(groupName, selectId) {
-    const select = document.getElementById(selectId);
-    const proxyName = select?.value || '';
-    if (!groupName || !proxyName) return this.toast('请选择要切换的节点', 'error');
-    const r = await this.api('POST', '/clash/select', { groupName, proxyName });
+  renderClashDelayResults() {
+    const summaryEl = document.getElementById('clash-delay-summary');
+    const resultsEl = document.getElementById('clash-delay-results');
+    if (!summaryEl || !resultsEl) return;
+    if (!this.clashDelayResults.length) {
+      summaryEl.textContent = '测速结果会显示在这里';
+      resultsEl.innerHTML = '<div class="card text-sm text-muted">尚未执行测速</div>';
+      return;
+    }
+    summaryEl.textContent = `测速 URL：${this.clashData?.testUrl || 'https://www.gstatic.com/generate_204'} · 共 ${this.clashDelayResults.length} 条结果`;
+    resultsEl.innerHTML = this.clashDelayResults.map(item => `
+      <div class="card" style="display:flex;justify-content:space-between;gap:12px;align-items:center">
+        <div style="flex:1;word-break:break-all">${this.esc(item.name)}</div>
+        <div style="font-weight:600;color:${item.delay != null ? 'var(--success)' : 'var(--error)'}">${item.delay != null ? `${this.esc(String(item.delay))} ms` : '失败'}</div>
+      </div>
+    `).join('');
+  },
+
+  renderClashLogs() {
+    const summaryEl = document.getElementById('clash-log-summary');
+    const outputEl = document.getElementById('clash-log-output');
+    if (!summaryEl || !outputEl) return;
+    const lineCount = Array.isArray(this.clashLogs) ? this.clashLogs.length : 0;
+    summaryEl.textContent = `Mihomo 日志尾部 · ${lineCount} 行`;
+    outputEl.value = (this.clashLogs || []).join('\n');
+  },
+
+  changeClashGroup(groupName) {
+    this.clashSelectedGroup = groupName || '';
+    this.clashDelayResults = [];
+    this.renderClashGroups();
+    this.renderClashDelayResults();
+  },
+
+  async selectClashNode(nodeName) {
+    if (!this.clashSelectedGroup || !nodeName) return this.toast('请先选择策略组和节点', 'error');
+    const r = await this.api('POST', '/clash/select', { groupName: this.clashSelectedGroup, proxyName: nodeName });
     if (r.error) return this.toast(r.error, 'error');
-    this.toast(`已切换 ${groupName} -> ${proxyName}`);
+    this.toast(`节点已切换到 ${nodeName}`);
     if (r.clash) {
-      this.renderClashStatus(r.clash);
-      this.renderClashSubscription(r.clash);
-      this.renderClashProxyGroups(r.clash);
+      this.applyClashData(r.clash);
     } else {
-      this.loadClash();
+      await this.loadClash();
     }
   },
 
-  async refreshClashStatus() {
-    const d = await this.api('GET', '/clash');
-    this.renderClashStatus(d);
-    this.renderClashSubscription(d);
-    this.renderClashProxyGroups(d);
+  async loadClashLogs() {
+    const limit = parseInt(document.getElementById('clash-log-lines').value, 10) || 200;
+    const r = await this.api('GET', `/clash/logs?limit=${limit}`);
+    this.clashLogs = r.logs?.lines || [];
+    this.renderClashLogs();
   },
 
-  async saveClash() {
-    const body = this.collectClashForm({ includeProfileBody: true });
-    const r = await this.api('PUT', '/clash', body);
+  async refreshClashStatus(showToast = false) {
+    const d = await this.api('GET', '/clash');
+    this.applyClashData(d);
+    await this.loadClashLogs();
+    if (showToast) this.toast('代理状态已刷新');
+  },
+
+  async importClashSubscription() {
+    const body = this.collectClashForm();
+    if (!body.subscriptionUrl) return this.toast('请先填写订阅地址', 'error');
+    const r = await this.api('POST', '/clash/subscription/import', body);
     if (r.error) return this.toast(r.error, 'error');
-    this.toast('Clash 配置已保存');
-    this.loadClash();
+    this.toast(r.message || '订阅地址已导入');
+    await this.loadClash();
+  },
+
+  async updateClashSubscription() {
+    const body = this.collectClashForm();
+    if (!body.subscriptionUrl) return this.toast('请先填写订阅地址', 'error');
+    const r = await this.api('POST', '/clash/subscription/update', body);
+    if (r.error) return this.toast(r.error, 'error');
+    this.toast(r.message || '订阅已更新');
+    await this.loadClash();
   },
 
   async startClash() {
     const r = await this.api('POST', '/clash/start', this.collectClashForm());
     if (r.error) return this.toast(r.error, 'error');
     this.toast('Clash 已启动');
-    this.loadClash();
+    await this.loadClash();
   },
 
   async stopClash() {
     const r = await this.api('POST', '/clash/stop', {});
     if (r.error) return this.toast(r.error, 'error');
     this.toast('Clash 已停止');
-    this.loadClash();
+    await this.loadClash();
   },
 
   async restartClash() {
     const r = await this.api('POST', '/clash/restart', this.collectClashForm());
     if (r.error) return this.toast(r.error, 'error');
     this.toast('Clash 已重启');
-    this.loadClash();
+    await this.loadClash();
   },
 
-  async syncClashProfile() {
-    const r = await this.api('POST', '/clash/sync', this.collectClashForm());
+  async runClashDelayTest() {
+    if (!this.clashSelectedGroup) return this.toast('请先选择策略组', 'error');
+    const r = await this.api('POST', '/clash/delay-test', { groupName: this.clashSelectedGroup });
     if (r.error) return this.toast(r.error, 'error');
-    this.toast('Clash 订阅已导入 / 刷新');
-    this.loadClash();
+    this.clashDelayResults = r.result?.results || [];
+    this.renderClashDelayResults();
+    this.toast('测速完成');
   },
 
   // ─── Logs ────────────────────────────────────

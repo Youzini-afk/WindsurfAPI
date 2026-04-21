@@ -23,7 +23,7 @@ import { MODELS, MODEL_TIER_ACCESS as _TIER_TABLE, getTierModels as _getTierMode
 import { windsurfLogin, refreshFirebaseToken, reRegisterWithCodeium } from './windsurf-login.js';
 import { getModelAccessConfig, setModelAccessMode, setModelAccessList, addModelToList, removeModelFromList } from './model-access.js';
 import { checkMessageRateLimit } from '../windsurf-api.js';
-import { getClashStatus, getClashDashboardState, updateClashConfig, startClash, stopClash, restartClash, syncClashProfile, selectClashProxy } from '../clash.js';
+import { getClashStatus, getClashDashboardState, updateClashConfig, startClash, stopClash, restartClash, syncClashProfile, selectClashProxy, testClashGroupDelays, getClashLogs } from '../clash.js';
 
 function json(res, status, body) {
   const data = JSON.stringify(body);
@@ -461,9 +461,9 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
 
   if (subpath === '/clash' && method === 'GET') {
     try {
-      return json(res, 200, await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true }));
+      return json(res, 200, await getClashDashboardState());
     } catch (err) {
-      return json(res, 200, { ...getClashStatus(true), proxyGroups: [], proxyGroupsError: err.message });
+      return json(res, 200, { ...getClashStatus(), groups: [], groupsError: err.message });
     }
   }
 
@@ -472,10 +472,10 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       const wasRunning = getClashStatus().running;
       updateClashConfig(body || {});
       if (wasRunning) await restartClash();
-      const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
+      const clash = await getClashDashboardState();
       return json(res, 200, { success: true, clash });
     } catch (err) {
-      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+      return json(res, 400, { error: err.message, clash: getClashStatus() });
     }
   }
 
@@ -485,10 +485,10 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
         updateClashConfig(body);
       }
       await startClash();
-      const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
+      const clash = await getClashDashboardState();
       return json(res, 200, { success: true, clash });
     } catch (err) {
-      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+      return json(res, 400, { error: err.message, clash: getClashStatus() });
     }
   }
 
@@ -497,7 +497,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       const clash = await stopClash();
       return json(res, 200, { success: true, clash });
     } catch (err) {
-      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+      return json(res, 400, { error: err.message, clash: getClashStatus() });
     }
   }
 
@@ -507,20 +507,52 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
         updateClashConfig(body);
       }
       await restartClash();
-      const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
+      const clash = await getClashDashboardState();
       return json(res, 200, { success: true, clash });
     } catch (err) {
-      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+      return json(res, 400, { error: err.message, clash: getClashStatus() });
+    }
+  }
+
+  if (subpath === '/clash/subscription/import' && method === 'POST') {
+    try {
+      updateClashConfig({ ...(body || {}), enabled: true });
+      const clash = await syncClashProfile({ ...(body || {}), enabled: true });
+      return json(res, 200, { success: true, clash, message: '订阅地址已导入' });
+    } catch (err) {
+      return json(res, 400, { error: err.message, clash: getClashStatus() });
+    }
+  }
+
+  if (subpath === '/clash/subscription/update' && method === 'POST') {
+    try {
+      const clash = await syncClashProfile(body || null);
+      return json(res, 200, { success: true, clash, message: '订阅已更新' });
+    } catch (err) {
+      return json(res, 400, { error: err.message, clash: getClashStatus() });
     }
   }
 
   if (subpath === '/clash/sync' && method === 'POST') {
     try {
-      await syncClashProfile(body || null);
-      const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
+      const clash = await syncClashProfile(body || null);
       return json(res, 200, { success: true, clash });
     } catch (err) {
-      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+      return json(res, 400, { error: err.message, clash: getClashStatus() });
+    }
+  }
+
+  if (subpath === '/clash/groups' && method === 'GET') {
+    try {
+      const clash = await getClashDashboardState();
+      return json(res, 200, {
+        success: true,
+        running: !!clash.running,
+        selectedGroup: clash.selectedGroup || '',
+        groups: clash.groups || [],
+      });
+    } catch (err) {
+      return json(res, 400, { error: err.message, selectedGroup: '', groups: [] });
     }
   }
 
@@ -530,7 +562,26 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       const clash = await selectClashProxy(groupName, proxyName);
       return json(res, 200, { success: true, clash });
     } catch (err) {
-      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+      return json(res, 400, { error: err.message, clash: getClashStatus() });
+    }
+  }
+
+  if (subpath === '/clash/delay-test' && method === 'POST') {
+    try {
+      const result = await testClashGroupDelays(body?.groupName || '');
+      return json(res, 200, { success: true, result });
+    } catch (err) {
+      return json(res, 400, { error: err.message, result: { running: false, groupName: '', results: [] } });
+    }
+  }
+
+  if (subpath === '/clash/logs' && method === 'GET') {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const limit = parseInt(url.searchParams.get('limit') || '0', 10) || undefined;
+      return json(res, 200, { success: true, logs: getClashLogs(limit) });
+    } catch (err) {
+      return json(res, 400, { error: err.message, logs: { running: false, path: '', lines: [] } });
     }
   }
 

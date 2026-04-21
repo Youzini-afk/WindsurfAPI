@@ -1,8 +1,15 @@
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
-import https from 'https';
+import { resolve as resolvePath } from 'path';
 import { config, log } from './config.js';
+
+const DEFAULT_TEST_URL = 'https://www.gstatic.com/generate_204';
+const DEFAULT_GROUP_NAME = '节点选择';
+const DEFAULT_AUTO_GROUP_NAME = '自动选择';
+const DEFAULT_LOG_LINES = 200;
+const GROUP_PROXY_TYPES = ['selector', 'urltest', 'fallback', 'loadbalance', 'relay'];
+const CLASH_LOG_FILE = resolvePath(config.clashDir, 'mihomo.log');
 
 const DEFAULT_STATE = {
   enabled: config.clashEnabled,
@@ -13,13 +20,17 @@ const DEFAULT_STATE = {
   socksPort: config.clashSocksPort,
   httpPort: config.clashHttpPort,
   controllerPort: config.clashControllerPort,
-  allowLan: false,
-  mode: 'rule',
-  logLevel: 'info',
   secret: '',
-  profileUrl: '',
+  subscriptionUrl: '',
+  groupName: DEFAULT_GROUP_NAME,
+  testUrl: DEFAULT_TEST_URL,
+  updateIntervalMinutes: 60,
+  logLines: DEFAULT_LOG_LINES,
   lastSyncAt: 0,
   lastError: '',
+  currentGroup: '',
+  currentProxy: '',
+  lastStoppedAt: 0,
 };
 
 let _proc = null;
@@ -27,7 +38,6 @@ let _ready = false;
 let _startedAt = 0;
 let _lastExit = null;
 let _startPromise = null;
-const GROUP_PROXY_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 
 function parseBool(value, fallback = false) {
   if (value == null || value === '') return fallback;
@@ -40,86 +50,114 @@ function normalizePort(value, fallback) {
   return Number.isFinite(n) && n > 0 && n < 65536 ? n : fallback;
 }
 
-function ensureDirs() {
-  try { mkdirSync(config.clashDir, { recursive: true }); } catch {}
+function normalizePositiveInt(value, fallback, min = 1) {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) && n >= min ? n : fallback;
 }
 
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function safeString(value, fallback = '') {
+  return String(value ?? fallback).trim();
+}
+
+function ensureDirs() {
+  try { mkdirSync(config.clashDir, { recursive: true }); } catch {}
 }
 
 function yamlString(value) {
   return JSON.stringify(String(value ?? ''));
 }
 
-function upsertTopLevel(yaml, key, rawValue) {
-  const line = `${key}: ${rawValue}`;
-  const pattern = new RegExp(`^${escapeRegex(key)}\\s*:.*$`, 'm');
-  if (pattern.test(yaml)) return yaml.replace(pattern, line);
-  return `${line}\n${yaml}`;
+function getMixedProxyUrl() {
+  return `http://127.0.0.1:${_state.mixedPort}`;
 }
 
-function upsertNestedKey(yaml, parentKey, childKey, rawValue) {
-  const lines = yaml.split('\n');
-  const parentIndex = lines.findIndex(line => line.trim() === `${parentKey}:`);
-  if (parentIndex === -1) {
-    return `${parentKey}:\n  ${childKey}: ${rawValue}\n${yaml}`;
-  }
-  let blockEnd = parentIndex + 1;
-  while (blockEnd < lines.length) {
-    const line = lines[blockEnd];
-    if (!line.trim()) {
-      blockEnd += 1;
-      continue;
-    }
-    if (!/^[ \t]+/.test(line)) break;
-    blockEnd += 1;
-  }
-  for (let i = parentIndex + 1; i < blockEnd; i += 1) {
-    if (lines[i].trim().startsWith(`${childKey}:`)) {
-      lines[i] = `  ${childKey}: ${rawValue}`;
-      return lines.join('\n');
-    }
-  }
-  lines.splice(parentIndex + 1, 0, `  ${childKey}: ${rawValue}`);
-  return lines.join('\n');
+function getControllerUrl() {
+  return `http://127.0.0.1:${_state.controllerPort}`;
 }
 
-function readProfileBody() {
+function readTailLines(path, limit) {
+  if (!limit || limit <= 0 || !existsSync(path)) return [];
   try {
-    if (!existsSync(config.clashProfileFile)) return '';
-    return readFileSync(config.clashProfileFile, 'utf8');
+    const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
+    return lines.slice(-limit);
   } catch {
-    return '';
+    return [];
   }
 }
 
-function persistProfile(body) {
+function appendClashLog(text, level = 'debug') {
+  const normalized = String(text || '').trim();
+  if (!normalized) return;
   ensureDirs();
-  if (!body || !body.trim()) {
-    try { rmSync(config.clashProfileFile, { force: true }); } catch {}
-    return;
+  for (const line of normalized.split(/\r?\n/)) {
+    if (!line) continue;
+    try {
+      appendFileSync(CLASH_LOG_FILE, `[${new Date().toISOString()}] ${line}\n`, 'utf8');
+    } catch {}
+    if (level === 'warn') log.warn(`[CLASH] ${line}`);
+    else if (level === 'error') log.error(`[CLASH] ${line}`);
+    else log.debug(`[CLASH] ${line}`);
   }
-  writeFileSync(config.clashProfileFile, body, 'utf8');
+}
+
+function clearProviderCache() {
+  try { rmSync(config.clashProfileFile, { force: true }); } catch {}
 }
 
 function buildRuntimeConfig() {
-  const profileBody = readProfileBody();
-  if (!profileBody.trim()) {
-    throw new Error(`Clash profile is empty. Save a profile to ${config.clashProfileFile} or set profileUrl first.`);
+  const subscriptionUrl = safeString(_state.subscriptionUrl);
+  if (!subscriptionUrl) {
+    throw new Error(`Clash subscriptionUrl is empty. Set it first before starting Mihomo.`);
   }
-  let runtime = profileBody.replace(/^\uFEFF/, '');
-  if (!runtime.endsWith('\n')) runtime += '\n';
-  runtime = upsertTopLevel(runtime, 'mixed-port', String(_state.mixedPort));
-  runtime = upsertTopLevel(runtime, 'socks-port', String(_state.socksPort));
-  runtime = upsertTopLevel(runtime, 'port', String(_state.httpPort));
-  runtime = upsertTopLevel(runtime, 'allow-lan', _state.allowLan ? 'true' : 'false');
-  runtime = upsertTopLevel(runtime, 'mode', yamlString(_state.mode));
-  runtime = upsertTopLevel(runtime, 'log-level', yamlString(_state.logLevel));
-  runtime = upsertTopLevel(runtime, 'external-controller', yamlString(`127.0.0.1:${_state.controllerPort}`));
-  runtime = upsertTopLevel(runtime, 'secret', yamlString(_state.secret));
-  runtime = upsertNestedKey(runtime, 'profile', 'store-selected', 'true');
-  runtime = upsertNestedKey(runtime, 'profile', 'store-fake-ip', 'true');
+  if (!/^https?:\/\//i.test(subscriptionUrl)) {
+    throw new Error('Clash subscriptionUrl must start with http:// or https://');
+  }
+  const groupName = safeString(_state.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME;
+  const testUrl = safeString(_state.testUrl, DEFAULT_TEST_URL) || DEFAULT_TEST_URL;
+  const updateIntervalSeconds = Math.max(5, normalizePositiveInt(_state.updateIntervalMinutes, 60)) * 60;
+  const runtime = [
+    `mixed-port: ${_state.mixedPort}`,
+    `port: ${_state.httpPort}`,
+    `socks-port: ${_state.socksPort}`,
+    'allow-lan: false',
+    `bind-address: ${yamlString('*')}`,
+    `mode: ${yamlString('rule')}`,
+    `log-level: ${yamlString('info')}`,
+    'ipv6: true',
+    `external-controller: ${yamlString(`127.0.0.1:${_state.controllerPort}`)}`,
+    `secret: ${yamlString(_state.secret)}`,
+    'profile:',
+    '  store-selected: true',
+    '  store-fake-ip: true',
+    'proxy-providers:',
+    '  primary:',
+    '    type: http',
+    `    url: ${yamlString(subscriptionUrl)}`,
+    `    path: ${yamlString(config.clashProfileFile)}`,
+    `    interval: ${updateIntervalSeconds}`,
+    '    health-check:',
+    '      enable: true',
+    `      url: ${yamlString(testUrl)}`,
+    '      interval: 600',
+    'proxy-groups:',
+    `  - name: ${yamlString(DEFAULT_AUTO_GROUP_NAME)}`,
+    '    type: url-test',
+    '    use:',
+    '      - primary',
+    `    url: ${yamlString(testUrl)}`,
+    '    interval: 300',
+    '    tolerance: 150',
+    `  - name: ${yamlString(groupName)}`,
+    '    type: select',
+    '    use:',
+    '      - primary',
+    '    proxies:',
+    `      - ${yamlString(DEFAULT_AUTO_GROUP_NAME)}`,
+    `      - ${yamlString('DIRECT')}`,
+    'rules:',
+    `  - ${yamlString(`MATCH,${groupName}`)}`,
+    '',
+  ].join('\n');
   writeFileSync(config.clashRuntimeFile, runtime, 'utf8');
   return runtime;
 }
@@ -137,14 +175,19 @@ function loadState() {
   state.enabled = parseBool(state.enabled, DEFAULT_STATE.enabled);
   state.autoStart = parseBool(state.autoStart, DEFAULT_STATE.autoStart);
   state.takeoverEnabled = parseBool(state.takeoverEnabled, DEFAULT_STATE.takeoverEnabled);
-  state.allowLan = parseBool(state.allowLan, false);
-  state.binaryPath = String(state.binaryPath || DEFAULT_STATE.binaryPath);
-  state.mode = String(state.mode || 'rule');
-  state.logLevel = String(state.logLevel || 'info');
-  state.secret = String(state.secret || '');
-  state.profileUrl = String(state.profileUrl || '');
+  state.binaryPath = safeString(state.binaryPath, DEFAULT_STATE.binaryPath) || DEFAULT_STATE.binaryPath;
+  state.secret = safeString(state.secret, '');
+  state.subscriptionUrl = safeString(state.subscriptionUrl || state.profileUrl || '', '');
+  state.profileUrl = state.subscriptionUrl;
+  state.groupName = safeString(state.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME;
+  state.testUrl = safeString(state.testUrl, DEFAULT_TEST_URL) || DEFAULT_TEST_URL;
+  state.updateIntervalMinutes = Math.max(5, normalizePositiveInt(state.updateIntervalMinutes, 60));
+  state.logLines = Math.max(20, normalizePositiveInt(state.logLines, DEFAULT_LOG_LINES));
   state.lastSyncAt = parseInt(state.lastSyncAt || '0', 10) || 0;
-  state.lastError = String(state.lastError || '');
+  state.lastError = safeString(state.lastError, '');
+  state.currentGroup = safeString(state.currentGroup, '');
+  state.currentProxy = safeString(state.currentProxy, '');
+  state.lastStoppedAt = parseInt(state.lastStoppedAt || '0', 10) || 0;
   state.mixedPort = normalizePort(state.mixedPort, DEFAULT_STATE.mixedPort);
   state.socksPort = normalizePort(state.socksPort, DEFAULT_STATE.socksPort);
   state.httpPort = normalizePort(state.httpPort, DEFAULT_STATE.httpPort);
@@ -165,13 +208,18 @@ function saveState() {
     socksPort: _state.socksPort,
     httpPort: _state.httpPort,
     controllerPort: _state.controllerPort,
-    allowLan: _state.allowLan,
-    mode: _state.mode,
-    logLevel: _state.logLevel,
     secret: _state.secret,
-    profileUrl: _state.profileUrl,
+    subscriptionUrl: _state.subscriptionUrl,
+    profileUrl: _state.subscriptionUrl,
+    groupName: _state.groupName,
+    testUrl: _state.testUrl,
+    updateIntervalMinutes: _state.updateIntervalMinutes,
+    logLines: _state.logLines,
     lastSyncAt: _state.lastSyncAt,
     lastError: _state.lastError,
+    currentGroup: _state.currentGroup,
+    currentProxy: _state.currentProxy,
+    lastStoppedAt: _state.lastStoppedAt,
   };
   try {
     writeFileSync(config.clashStateFile, JSON.stringify(payload, null, 2), 'utf8');
@@ -182,45 +230,6 @@ function saveState() {
 
 function isRunning() {
   return !!_proc && _proc.exitCode == null;
-}
-
-async function downloadText(url, depth = 0) {
-  if (depth > 5) throw new Error('Too many redirects while downloading Clash profile');
-  const parsed = new URL(url);
-  const transport = parsed.protocol === 'http:' ? http : https;
-  return new Promise((resolve, reject) => {
-    const req = transport.request({
-      protocol: parsed.protocol,
-      hostname: parsed.hostname,
-      port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
-      path: `${parsed.pathname}${parsed.search}`,
-      method: 'GET',
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Clash Verge/1.7.7 Mihomo/1.19.1',
-        'Accept': 'application/x-yaml, text/yaml, text/plain, */*',
-      },
-    }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        const next = new URL(res.headers.location, parsed).toString();
-        res.resume();
-        downloadText(next, depth + 1).then(resolve, reject);
-        return;
-      }
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        const bufs = [];
-        res.on('data', (d) => bufs.push(d));
-        res.on('end', () => reject(new Error(`Clash profile download failed (${res.statusCode}): ${Buffer.concat(bufs).toString('utf8').slice(0, 200)}`)));
-        return;
-      }
-      const bufs = [];
-      res.on('data', (d) => bufs.push(d));
-      res.on('end', () => resolve(Buffer.concat(bufs).toString('utf8')));
-    });
-    req.on('timeout', () => req.destroy(new Error('Clash profile download timeout')));
-    req.on('error', reject);
-    req.end();
-  });
 }
 
 async function controllerRequest(path, { method = 'GET', body = null, timeout = 4000 } = {}) {
@@ -275,31 +284,53 @@ async function fetchControllerVersion() {
 function normalizeClashGroups(payload) {
   const proxies = payload?.proxies && typeof payload.proxies === 'object' ? payload.proxies : {};
   return Object.entries(proxies)
-    .filter(([name, proxy]) => {
+    .filter(([, proxy]) => {
       if (!proxy || !Array.isArray(proxy.all) || proxy.all.length === 0) return false;
-      return name === 'GLOBAL' || GROUP_PROXY_TYPES.has(String(proxy.type || ''));
-    })
-    .sort(([a], [b]) => {
-      if (a === 'GLOBAL') return -1;
-      if (b === 'GLOBAL') return 1;
-      return a.localeCompare(b);
+      const proxyType = safeString(proxy.type, '').toLowerCase();
+      return GROUP_PROXY_TYPES.some(marker => proxyType.includes(marker));
     })
     .map(([name, proxy]) => ({
-      name,
+      name: String(name),
       type: String(proxy.type || ''),
-      current: String(proxy.now || ''),
-      optionCount: Array.isArray(proxy.all) ? proxy.all.length : 0,
-      options: (proxy.all || []).map((optionName) => {
-        const child = proxies[optionName] || null;
-        const history = Array.isArray(child?.history) ? child.history[child.history.length - 1] : null;
-        return {
-          name: String(optionName),
-          type: String(child?.type || ''),
-          alive: typeof child?.alive === 'boolean' ? child.alive : null,
-          delay: Number.isFinite(history?.delay) ? history.delay : null,
-        };
-      }),
-    }));
+      now: String(proxy.now || ''),
+      all: Array.isArray(proxy.all) ? proxy.all.map(item => String(item)) : [],
+      alive: typeof proxy.alive === 'boolean' ? proxy.alive : true,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function resolveSelectedGroup(groups) {
+  const preferred = safeString(_state.currentGroup || _state.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME;
+  return groups.find(group => group.name === preferred)?.name
+    || groups.find(group => preferred && group.name.includes(preferred))?.name
+    || groups[0]?.name
+    || '';
+}
+
+function syncCurrentSelection(groups, selectedGroup) {
+  const group = groups.find(item => item.name === selectedGroup) || null;
+  _state.currentGroup = selectedGroup || '';
+  _state.currentProxy = group?.now || _state.currentProxy || '';
+  saveState();
+}
+
+async function getClashGroups() {
+  if (!_ready || !isRunning()) {
+    return {
+      running: false,
+      selectedGroup: safeString(_state.currentGroup || _state.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME,
+      groups: [],
+    };
+  }
+  const payload = await controllerRequest('/proxies');
+  const groups = normalizeClashGroups(payload);
+  const selectedGroup = resolveSelectedGroup(groups);
+  syncCurrentSelection(groups, selectedGroup);
+  return {
+    running: true,
+    selectedGroup,
+    groups,
+  };
 }
 
 async function waitUntilReady(timeoutMs = 20000) {
@@ -316,30 +347,17 @@ async function waitUntilReady(timeoutMs = 20000) {
 }
 
 function attachProcessLogs(proc) {
-  proc.stdout.on('data', (buf) => {
-    const text = buf.toString('utf8').trim();
-    if (!text) return;
-    for (const line of text.split(/\r?\n/)) {
-      if (!line) continue;
-      log.debug(`[CLASH] ${line}`);
-    }
-  });
-  proc.stderr.on('data', (buf) => {
-    const text = buf.toString('utf8').trim();
-    if (!text) return;
-    for (const line of text.split(/\r?\n/)) {
-      if (!line) continue;
-      log.warn(`[CLASH] ${line}`);
-    }
-  });
+  proc.stdout.on('data', (buf) => appendClashLog(buf.toString('utf8'), 'debug'));
+  proc.stderr.on('data', (buf) => appendClashLog(buf.toString('utf8'), 'warn'));
   proc.on('exit', (code, signal) => {
     _ready = false;
     _lastExit = { code, signal, at: Date.now() };
+    _state.lastStoppedAt = Date.now();
     if (_proc === proc) _proc = null;
     if (code && code !== 0) {
       _state.lastError = `Clash exited with code=${code} signal=${signal || 'none'}`;
-      saveState();
     }
+    saveState();
     log.warn(`Clash exited: code=${code} signal=${signal}`);
   });
   proc.on('error', (err) => {
@@ -350,6 +368,22 @@ function attachProcessLogs(proc) {
     saveState();
     log.error(`Clash spawn error: ${err.message}`);
   });
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  if (!items.length) return [];
+  const results = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export function getClashProxy() {
@@ -374,97 +408,172 @@ export function getClashStatus(includeProfileBody = false) {
     socksPort: _state.socksPort,
     httpPort: _state.httpPort,
     controllerPort: _state.controllerPort,
-    allowLan: _state.allowLan,
-    mode: _state.mode,
-    logLevel: _state.logLevel,
-    profileUrl: _state.profileUrl,
+    secret: _state.secret,
+    subscriptionUrl: _state.subscriptionUrl,
+    profileUrl: _state.subscriptionUrl,
+    groupName: _state.groupName,
+    testUrl: _state.testUrl,
+    updateIntervalMinutes: _state.updateIntervalMinutes,
+    logLines: _state.logLines,
     lastSyncAt: _state.lastSyncAt,
     lastError: _state.lastError,
     ready: _ready,
     running: isRunning(),
     pid: _proc?.pid || null,
     startedAt: _startedAt,
+    lastStoppedAt: _state.lastStoppedAt,
     lastExit: _lastExit,
     hasProfile: existsSync(config.clashProfileFile),
     profileFile: config.clashProfileFile,
     runtimeFile: config.clashRuntimeFile,
     stateFile: config.clashStateFile,
+    logFile: CLASH_LOG_FILE,
+    mixedProxyUrl: getMixedProxyUrl(),
+    controllerUrl: getControllerUrl(),
+    currentGroup: _state.currentGroup,
+    currentProxy: _state.currentProxy,
+    subscriptionConfigured: !!_state.subscriptionUrl,
     proxy: getClashProxy(),
     effectiveTakeover: !!getClashProxy(),
   };
-  if (includeProfileBody) status.profileBody = readProfileBody();
+  if (includeProfileBody) status.profileBody = '';
   return status;
 }
 
-export async function getClashDashboardState({ includeProfileBody = false, includeProxyGroups = true } = {}) {
+export async function getClashDashboardState({ includeProfileBody = false } = {}) {
   const state = {
     ...getClashStatus(includeProfileBody),
     controllerVersion: null,
-    controllerConfig: null,
-    proxyGroups: [],
-    proxyGroupsError: '',
+    groups: [],
+    selectedGroup: '',
+    groupsCount: 0,
+    groupsError: '',
   };
   if (!state.running || !state.ready) return state;
-  const [version, controllerConfig, proxies] = await Promise.all([
+  const [version, groupPayload] = await Promise.all([
     fetchControllerVersion().catch((err) => {
       state.lastError = err.message;
       return null;
     }),
-    controllerRequest('/configs').catch(() => null),
-    includeProxyGroups ? controllerRequest('/proxies').catch((err) => {
-      state.proxyGroupsError = err.message;
-      return null;
-    }) : Promise.resolve(null),
+    getClashGroups().catch((err) => {
+      state.groupsError = err.message;
+      return { running: true, selectedGroup: '', groups: [] };
+    }),
   ]);
   state.controllerVersion = version;
-  state.controllerConfig = controllerConfig;
-  if (proxies) state.proxyGroups = normalizeClashGroups(proxies);
+  state.groups = groupPayload.groups || [];
+  state.selectedGroup = groupPayload.selectedGroup || '';
+  state.groupsCount = state.groups.length;
+  if (state.selectedGroup) {
+    const currentGroup = state.groups.find(group => group.name === state.selectedGroup) || null;
+    state.currentGroup = state.selectedGroup;
+    state.currentProxy = currentGroup?.now || state.currentProxy || '';
+  }
   return state;
-}
-
-export async function selectClashProxy(groupName, proxyName) {
-  if (!groupName || !proxyName) throw new Error('groupName and proxyName are required');
-  if (!_ready || !isRunning()) throw new Error('Clash is not running');
-  await controllerRequest(`/proxies/${encodeURIComponent(groupName)}`, {
-    method: 'PUT',
-    body: { name: proxyName },
-  });
-  return getClashDashboardState({ includeProfileBody: false, includeProxyGroups: true });
 }
 
 export function updateClashConfig(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, 'enabled')) _state.enabled = parseBool(patch.enabled, _state.enabled);
   if (Object.prototype.hasOwnProperty.call(patch, 'autoStart')) _state.autoStart = parseBool(patch.autoStart, _state.autoStart);
   if (Object.prototype.hasOwnProperty.call(patch, 'takeoverEnabled')) _state.takeoverEnabled = parseBool(patch.takeoverEnabled, _state.takeoverEnabled);
-  if (Object.prototype.hasOwnProperty.call(patch, 'binaryPath')) _state.binaryPath = String(patch.binaryPath || '').trim() || DEFAULT_STATE.binaryPath;
+  if (Object.prototype.hasOwnProperty.call(patch, 'binaryPath')) _state.binaryPath = safeString(patch.binaryPath, DEFAULT_STATE.binaryPath) || DEFAULT_STATE.binaryPath;
   if (Object.prototype.hasOwnProperty.call(patch, 'mixedPort')) _state.mixedPort = normalizePort(patch.mixedPort, _state.mixedPort);
   if (Object.prototype.hasOwnProperty.call(patch, 'socksPort')) _state.socksPort = normalizePort(patch.socksPort, _state.socksPort);
   if (Object.prototype.hasOwnProperty.call(patch, 'httpPort')) _state.httpPort = normalizePort(patch.httpPort, _state.httpPort);
   if (Object.prototype.hasOwnProperty.call(patch, 'controllerPort')) _state.controllerPort = normalizePort(patch.controllerPort, _state.controllerPort);
-  if (Object.prototype.hasOwnProperty.call(patch, 'allowLan')) _state.allowLan = parseBool(patch.allowLan, _state.allowLan);
-  if (Object.prototype.hasOwnProperty.call(patch, 'mode')) _state.mode = String(patch.mode || 'rule');
-  if (Object.prototype.hasOwnProperty.call(patch, 'logLevel')) _state.logLevel = String(patch.logLevel || 'info');
-  if (Object.prototype.hasOwnProperty.call(patch, 'secret')) _state.secret = String(patch.secret || '');
-  if (Object.prototype.hasOwnProperty.call(patch, 'profileUrl')) _state.profileUrl = String(patch.profileUrl || '').trim();
-  if (Object.prototype.hasOwnProperty.call(patch, 'profileBody')) persistProfile(String(patch.profileBody || ''));
+  if (Object.prototype.hasOwnProperty.call(patch, 'secret')) _state.secret = safeString(patch.secret, '');
+  if (Object.prototype.hasOwnProperty.call(patch, 'subscriptionUrl') || Object.prototype.hasOwnProperty.call(patch, 'profileUrl')) {
+    _state.subscriptionUrl = safeString(patch.subscriptionUrl ?? patch.profileUrl, '');
+    _state.profileUrl = _state.subscriptionUrl;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'groupName')) _state.groupName = safeString(patch.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME;
+  if (Object.prototype.hasOwnProperty.call(patch, 'testUrl')) _state.testUrl = safeString(patch.testUrl, DEFAULT_TEST_URL) || DEFAULT_TEST_URL;
+  if (Object.prototype.hasOwnProperty.call(patch, 'updateIntervalMinutes')) {
+    _state.updateIntervalMinutes = Math.max(5, normalizePositiveInt(patch.updateIntervalMinutes, _state.updateIntervalMinutes || 60));
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'logLines')) {
+    _state.logLines = Math.max(20, normalizePositiveInt(patch.logLines, _state.logLines || DEFAULT_LOG_LINES));
+  }
   _state.lastError = '';
   saveState();
-  return getClashStatus(true);
+  return getClashStatus(false);
 }
 
 export async function syncClashProfile(patch = null) {
   if (patch && typeof patch === 'object' && Object.keys(patch).length > 0) {
     updateClashConfig(patch);
   }
-  if (!_state.profileUrl) throw new Error('Clash profileUrl is empty');
-  const body = await downloadText(_state.profileUrl);
-  if (!body.trim()) throw new Error('Downloaded Clash profile is empty');
-  persistProfile(body);
+  if (!_state.subscriptionUrl) {
+    throw new Error('Clash subscriptionUrl is empty');
+  }
+  clearProviderCache();
+  buildRuntimeConfig();
   _state.lastSyncAt = Date.now();
   _state.lastError = '';
   saveState();
   if (isRunning()) await restartClash();
-  return getClashStatus(true);
+  return getClashDashboardState();
+}
+
+export async function selectClashProxy(groupName, proxyName) {
+  const targetGroup = safeString(groupName, '');
+  const targetProxy = safeString(proxyName, '');
+  if (!targetGroup) throw new Error('groupName is required');
+  if (!_ready || !isRunning()) throw new Error('Clash is not running');
+  _state.groupName = targetGroup;
+  _state.currentGroup = targetGroup;
+  if (targetProxy) {
+    await controllerRequest(`/proxies/${encodeURIComponent(targetGroup)}`, {
+      method: 'PUT',
+      body: { name: targetProxy },
+    });
+    _state.currentProxy = targetProxy;
+  }
+  saveState();
+  return getClashDashboardState();
+}
+
+export async function testClashGroupDelays(groupName = '') {
+  const groupPayload = await getClashGroups();
+  if (!groupPayload.running) {
+    return {
+      running: false,
+      groupName: safeString(groupName || groupPayload.selectedGroup, ''),
+      testUrl: _state.testUrl,
+      results: [],
+    };
+  }
+  const targetGroupName = safeString(groupName || groupPayload.selectedGroup, '');
+  const targetGroup = groupPayload.groups.find(group => group.name === targetGroupName);
+  if (!targetGroup) throw new Error('指定策略组不存在');
+  const candidates = targetGroup.all.filter(name => !['DIRECT', 'REJECT'].includes(String(name).toUpperCase()));
+  const results = await mapWithConcurrency(candidates, 8, async (nodeName) => {
+    try {
+      const payload = await controllerRequest(`/proxies/${encodeURIComponent(nodeName)}/delay?timeout=3000&url=${encodeURIComponent(_state.testUrl)}`, {
+        timeout: 5000,
+      });
+      const delay = Number.isFinite(payload?.delay) ? payload.delay : null;
+      return { name: nodeName, delay, error: '' };
+    } catch (err) {
+      return { name: nodeName, delay: null, error: err.message };
+    }
+  });
+  results.sort((a, b) => (a.delay == null ? 1 : 0) - (b.delay == null ? 1 : 0) || ((a.delay ?? 999999) - (b.delay ?? 999999)));
+  return {
+    running: true,
+    groupName: targetGroupName,
+    testUrl: _state.testUrl,
+    results,
+  };
+}
+
+export function getClashLogs(limit = _state.logLines) {
+  const lineLimit = Math.max(20, normalizePositiveInt(limit, _state.logLines || DEFAULT_LOG_LINES));
+  return {
+    running: isRunning(),
+    path: CLASH_LOG_FILE,
+    lines: readTailLines(CLASH_LOG_FILE, lineLimit),
+  };
 }
 
 export async function startClash() {
@@ -474,9 +583,6 @@ export async function startClash() {
     ensureDirs();
     if (!existsSync(_state.binaryPath)) {
       throw new Error(`Mihomo binary not found at ${_state.binaryPath}`);
-    }
-    if (!existsSync(config.clashProfileFile) && _state.profileUrl) {
-      await syncClashProfile();
     }
     buildRuntimeConfig();
     _ready = false;
@@ -491,6 +597,7 @@ export async function startClash() {
     _ready = true;
     _state.lastError = '';
     saveState();
+    await getClashGroups().catch(() => null);
     log.info(`Clash ready on mixed-port ${_state.mixedPort}`);
     return getClashStatus();
   })().catch((err) => {
@@ -509,6 +616,8 @@ export async function stopClash() {
   const proc = _proc;
   if (!proc || proc.exitCode != null) {
     _proc = null;
+    _state.lastStoppedAt = Date.now();
+    saveState();
     return getClashStatus();
   }
   return new Promise((resolve) => {
@@ -517,6 +626,8 @@ export async function stopClash() {
       if (settled) return;
       settled = true;
       if (_proc === proc) _proc = null;
+      _state.lastStoppedAt = Date.now();
+      saveState();
       resolve(getClashStatus());
     };
     proc.once('exit', finish);
