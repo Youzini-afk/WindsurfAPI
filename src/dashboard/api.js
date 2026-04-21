@@ -481,6 +481,9 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
 
   if (subpath === '/clash/start' && method === 'POST') {
     try {
+      if (body && typeof body === 'object' && Object.keys(body).length > 0) {
+        updateClashConfig(body);
+      }
       await startClash();
       const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
       return json(res, 200, { success: true, clash });
@@ -500,6 +503,9 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
 
   if (subpath === '/clash/restart' && method === 'POST') {
     try {
+      if (body && typeof body === 'object' && Object.keys(body).length > 0) {
+        updateClashConfig(body);
+      }
       await restartClash();
       const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
       return json(res, 200, { success: true, clash });

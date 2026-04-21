@@ -2941,8 +2941,8 @@ const App = {
     this.poll('clash', () => this.refreshClashStatus(), 10000);
   },
 
-  collectClashForm() {
-    return {
+  collectClashForm(options = {}) {
+    const body = {
       enabled: document.getElementById('clash-enabled').checked,
       autoStart: document.getElementById('clash-auto-start').checked,
       takeoverEnabled: document.getElementById('clash-takeover-enabled').checked,
@@ -2950,8 +2950,10 @@ const App = {
       mixedPort: parseInt(document.getElementById('clash-mixed-port').value, 10) || 7890,
       controllerPort: parseInt(document.getElementById('clash-controller-port').value, 10) || 9090,
       profileUrl: document.getElementById('clash-profile-url').value.trim(),
-      profileBody: document.getElementById('clash-profile-body').value,
     };
+    const profileBody = document.getElementById('clash-profile-body').value;
+    if (options.includeProfileBody || profileBody.trim()) body.profileBody = profileBody;
+    return body;
   },
 
   renderClashStatus(d) {
@@ -3071,7 +3073,7 @@ const App = {
   },
 
   async saveClash() {
-    const body = this.collectClashForm();
+    const body = this.collectClashForm({ includeProfileBody: true });
     const r = await this.api('PUT', '/clash', body);
     if (r.error) return this.toast(r.error, 'error');
     this.toast('Clash 配置已保存');
@@ -3079,7 +3081,7 @@ const App = {
   },
 
   async startClash() {
-    const r = await this.api('POST', '/clash/start', {});
+    const r = await this.api('POST', '/clash/start', this.collectClashForm());
     if (r.error) return this.toast(r.error, 'error');
     this.toast('Clash 已启动');
     this.loadClash();
@@ -3093,7 +3095,7 @@ const App = {
   },
 
   async restartClash() {
-    const r = await this.api('POST', '/clash/restart', {});
+    const r = await this.api('POST', '/clash/restart', this.collectClashForm());
     if (r.error) return this.toast(r.error, 'error');
     this.toast('Clash 已重启');
     this.loadClash();
