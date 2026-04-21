@@ -4,8 +4,7 @@ import { initAuth, isAuthenticated, saveAccountsSync } from './auth.js';
 import { startLanguageServer, waitForReady, isLanguageServerRunning, stopLanguageServer } from './langserver.js';
 import { startServer } from './server.js';
 import { config, log } from './config.js';
-import { existsSync, readFileSync } from 'fs';
-import { execSync } from 'child_process';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -33,16 +32,17 @@ async function main() {
 
   // Start language server binary
   const binaryPath = config.lsBinaryPath;
+  try {
+    mkdirSync(config.appDataDir, { recursive: true });
+    mkdirSync(config.logDir, { recursive: true });
+    mkdirSync(config.windsurfDataDir, { recursive: true });
+    mkdirSync(join(config.windsurfDataDir, 'db'), { recursive: true });
+    mkdirSync(config.workspaceDir, { recursive: true });
+    for (const entry of readdirSync(config.workspaceDir)) {
+      rmSync(join(config.workspaceDir, entry), { recursive: true, force: true });
+    }
+  } catch {}
   if (existsSync(binaryPath)) {
-    try {
-      // Wipe the workspace on every startup. If we don't, files created by
-      // previous chat sessions (e.g. Claude "editing" config.yaml/lru_cache.py
-      // via the baked-in Cascade tool prompts) persist and pollute the next
-      // request — the model sees them at session init and starts narrating
-      // edits to files the caller never mentioned.
-      execSync('mkdir -p /opt/windsurf/data/db /tmp/windsurf-workspace && rm -rf /tmp/windsurf-workspace/* /tmp/windsurf-workspace/.[!.]* 2>/dev/null || true', { stdio: 'ignore' });
-    } catch {}
-
     await startLanguageServer({
       binaryPath,
       port: config.lsPort,

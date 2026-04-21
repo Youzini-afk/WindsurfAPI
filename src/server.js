@@ -24,6 +24,7 @@ import { handleMessages } from './handlers/messages.js';
 import { handleModels } from './handlers/models.js';
 import { handleDashboardApi } from './dashboard/api.js';
 import { config, log } from './config.js';
+import { getLsStatus } from './langserver.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -105,6 +106,31 @@ async function route(req, res) {
       branch: VERSION_INFO.branch,
       uptime: Math.round(process.uptime()),
       accounts: counts,
+    });
+  }
+  if (path === '/ready') {
+    const counts = getAccountCount();
+    const lsStatus = getLsStatus();
+    const defaultLs = lsStatus.instances.find(i => i.key === 'default') || null;
+    const checks = {
+      lsBinaryPresent: existsSync(config.lsBinaryPath),
+      lsRunning: lsStatus.running,
+      lsReady: !!defaultLs?.ready,
+    };
+    const ready = checks.lsBinaryPresent && checks.lsRunning && checks.lsReady;
+    return json(res, ready ? 200 : 503, {
+      status: ready ? 'ready' : 'not_ready',
+      provider: 'WindsurfAPI bydwgx1337',
+      version: VERSION_INFO.version,
+      uptime: Math.round(process.uptime()),
+      checks,
+      accounts: counts,
+      paths: {
+        appDataDir: config.appDataDir,
+        workspaceDir: config.workspaceDir,
+        windsurfDataDir: config.windsurfDataDir,
+        lsBinaryPath: config.lsBinaryPath,
+      },
     });
   }
 

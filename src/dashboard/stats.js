@@ -3,9 +3,9 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { config } from '../config.js';
 
-const STATS_FILE = join(process.cwd(), 'stats.json');
+const STATS_FILE = config.statsFile;
 
 const _state = {
   startedAt: Date.now(),

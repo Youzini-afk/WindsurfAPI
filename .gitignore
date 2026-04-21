@@ -11,6 +11,7 @@ src/runtime-config.json
 proxy.json
 logs/
 *.log
+.data/
 .playwright-mcp/
 .claude/
 __pycache__/

@@ -8,7 +8,8 @@
 
 import https from 'https';
 import { randomUUID } from 'crypto';
-import { log } from './config.js';
+import { pathToFileURL } from 'url';
+import { config, log } from './config.js';
 import { grpcFrame, grpcUnary, grpcStream } from './grpc.js';
 import { getLsEntryByPort } from './langserver.js';
 import {
@@ -129,8 +130,8 @@ export class WindsurfClient {
     if (lsEntry.workspaceInit) return lsEntry.workspaceInit;
 
     const sessionId = lsEntry.sessionId;
-    const workspacePath = '/tmp/windsurf-workspace';
-    const workspaceUri = 'file:///tmp/windsurf-workspace';
+    const workspacePath = config.workspaceDir;
+    const workspaceUri = pathToFileURL(workspacePath).href;
 
     lsEntry.workspaceInit = (async () => {
       try {

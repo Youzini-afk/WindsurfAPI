@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.data
+node_modules
+logs
+accounts.json
+proxy.json
+model-access.json
+runtime-config.json
+stats.json
+src/runtime-config.json
+.playwright-mcp
+.claude
+audit
+*.log
+*.png

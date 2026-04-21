@@ -21,22 +21,50 @@
  * boundary.
  */
 
+import { config } from './config.js';
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function uniquePathLiterals(values) {
+  const out = [];
+  for (const value of values) {
+    if (!value || typeof value !== 'string') continue;
+    const variants = [value, value.replace(/\\/g, '/')];
+    for (const variant of variants) {
+      if (!variant || out.includes(variant)) continue;
+      out.push(variant);
+    }
+  }
+  return out;
+}
+
+const WORKSPACE_LITERALS = uniquePathLiterals([config.workspaceDir, '/tmp/windsurf-workspace']);
+const INTERNAL_LITERALS = uniquePathLiterals([
+  config.windsurfHome,
+  config.windsurfDataDir,
+  config.appDataDir,
+  config.logDir,
+  config.homeDir,
+  config.repoRoot,
+  process.cwd(),
+  '/opt/windsurf',
+  '/root/WindsurfAPI',
+]);
+const PATH_TAIL_SOURCE = /[\\/][^\s"'`<>)}\],*;]*/.source;
+
 // Literal prefixes that must never appear in output. First-match wins in the
 // order given. The workspace literal is replaced with "." so text like
 // "/tmp/windsurf-workspace/foo.py" becomes "./foo.py" (still readable). The
 // other two go to "[internal]" — no reason a caller should ever see them.
 const PATTERNS = [
-  [/\/tmp\/windsurf-workspace(\/[^\s"'`<>)}\],*;]*)?/g, '.$1'],
-  [/\/opt\/windsurf(?:\/[^\s"'`<>)}\],*;]*)?/g, '[internal]'],
-  [/\/root\/WindsurfAPI(?:\/[^\s"'`<>)}\],*;]*)?/g, '[internal]'],
+  ...WORKSPACE_LITERALS.map(lit => [new RegExp(`${escapeRegex(lit)}(${PATH_TAIL_SOURCE})?`, 'g'), '.$1']),
+  ...INTERNAL_LITERALS.map(lit => [new RegExp(`${escapeRegex(lit)}(?:${PATH_TAIL_SOURCE})?`, 'g'), '[internal]']),
 ];
 
 // Bare literals (no path tail) used by the streaming cut-point finder.
-const SENSITIVE_LITERALS = [
-  '/tmp/windsurf-workspace',
-  '/opt/windsurf',
-  '/root/WindsurfAPI',
-];
+const SENSITIVE_LITERALS = [...WORKSPACE_LITERALS, ...INTERNAL_LITERALS];
 
 // Character class that counts as part of a path body. Mirrors the PATTERNS
 // regex char class so cut-point detection matches replacement behaviour.

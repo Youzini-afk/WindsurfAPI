@@ -5,6 +5,10 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
+function resolvePath(value, fallback) {
+  return resolve(ROOT, value || fallback);
+}
+
 // Load .env file manually (zero dependencies)
 function loadEnv() {
   const envPath = resolve(ROOT, '.env');
@@ -28,7 +32,32 @@ function loadEnv() {
 
 loadEnv();
 
+const APP_DATA_DIR = resolvePath(process.env.APP_DATA_DIR, '.data');
+const HOME_DIR = resolvePath(process.env.HOME_DIR || process.env.HOME || process.env.USERPROFILE, resolve(APP_DATA_DIR, 'home'));
+const WINDSURF_HOME = resolvePath(process.env.WINDSURF_HOME, '/opt/windsurf');
+const WINDSURF_DATA_DIR = resolvePath(process.env.WINDSURF_DATA_DIR, resolve(WINDSURF_HOME, 'data'));
+const WORKSPACE_DIR = resolvePath(process.env.WORKSPACE_DIR, '/tmp/windsurf-workspace');
+const LS_BINARY_PATH = resolvePath(process.env.LS_BINARY_PATH, resolve(WINDSURF_HOME, 'language_server_linux_x64'));
+const RUNTIME_CONFIG_FILE = resolvePath(process.env.RUNTIME_CONFIG_FILE, resolve(APP_DATA_DIR, 'runtime-config.json'));
+const ACCOUNTS_FILE = resolvePath(process.env.ACCOUNTS_FILE, resolve(APP_DATA_DIR, 'accounts.json'));
+const PROXY_CONFIG_FILE = resolvePath(process.env.PROXY_CONFIG_FILE, resolve(APP_DATA_DIR, 'proxy.json'));
+const MODEL_ACCESS_FILE = resolvePath(process.env.MODEL_ACCESS_FILE, resolve(APP_DATA_DIR, 'model-access.json'));
+const STATS_FILE = resolvePath(process.env.STATS_FILE, resolve(APP_DATA_DIR, 'stats.json'));
+const LOG_DIR = resolvePath(process.env.LOG_DIR, resolve(APP_DATA_DIR, 'logs'));
+
 export const config = {
+  repoRoot: ROOT,
+  appDataDir: APP_DATA_DIR,
+  homeDir: HOME_DIR,
+  windsurfHome: WINDSURF_HOME,
+  windsurfDataDir: WINDSURF_DATA_DIR,
+  workspaceDir: WORKSPACE_DIR,
+  runtimeConfigFile: RUNTIME_CONFIG_FILE,
+  accountsFile: ACCOUNTS_FILE,
+  proxyConfigFile: PROXY_CONFIG_FILE,
+  modelAccessFile: MODEL_ACCESS_FILE,
+  statsFile: STATS_FILE,
+  logDir: LOG_DIR,
   port: parseInt(process.env.PORT || '3003', 10),
   apiKey: process.env.API_KEY || '',
 
@@ -43,7 +72,7 @@ export const config = {
   logLevel: process.env.LOG_LEVEL || 'info',
 
   // Language server
-  lsBinaryPath: process.env.LS_BINARY_PATH || '/opt/windsurf/language_server_linux_x64',
+  lsBinaryPath: LS_BINARY_PATH,
   lsPort: parseInt(process.env.LS_PORT || '42100', 10),
 
   // Dashboard

@@ -8,14 +8,15 @@
  * canceled.
  */
 
-import { spawn, execSync } from 'child_process';
-import { existsSync } from 'fs';
+import { spawn } from 'child_process';
+import { existsSync, mkdirSync } from 'fs';
 import http2 from 'http2';
 import net from 'net';
-import { log } from './config.js';
+import { join } from 'path';
+import { config, log } from './config.js';
 import { closeSessionForPort } from './grpc.js';
 
-const DEFAULT_BINARY = '/opt/windsurf/language_server_linux_x64';
+const DEFAULT_BINARY = config.lsBinaryPath;
 const DEFAULT_PORT = 42100;
 const DEFAULT_CSRF = 'windsurf-api-csrf-fixed-token';
 const DEFAULT_API_URL = 'https://server.self-serve.windsurf.com';
@@ -123,8 +124,8 @@ export async function ensureLs(proxy = null) {
       }
     }
 
-    const dataDir = `/opt/windsurf/data/${key}`;
-    try { execSync(`mkdir -p ${dataDir}/db`, { stdio: 'ignore' }); } catch {}
+    const dataDir = join(config.windsurfDataDir, key);
+    try { mkdirSync(join(dataDir, 'db'), { recursive: true }); } catch {}
 
     const args = [
       `--api_server_url=${_apiServerUrl}`,
@@ -139,7 +140,7 @@ export async function ensureLs(proxy = null) {
       '--detect_proxy=false',
     ];
 
-    const env = { ...process.env, HOME: '/root' };
+    const env = { ...process.env, HOME: config.homeDir };
     const pUrl = proxyUrl(proxy);
     if (pUrl) {
       env.HTTPS_PROXY = pUrl;
