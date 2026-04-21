@@ -23,7 +23,7 @@ import { MODELS, MODEL_TIER_ACCESS as _TIER_TABLE, getTierModels as _getTierMode
 import { windsurfLogin, refreshFirebaseToken, reRegisterWithCodeium } from './windsurf-login.js';
 import { getModelAccessConfig, setModelAccessMode, setModelAccessList, addModelToList, removeModelFromList } from './model-access.js';
 import { checkMessageRateLimit } from '../windsurf-api.js';
-import { getClashStatus, updateClashConfig, startClash, stopClash, restartClash, syncClashProfile } from '../clash.js';
+import { getClashStatus, getClashDashboardState, updateClashConfig, startClash, stopClash, restartClash, syncClashProfile, selectClashProxy } from '../clash.js';
 
 function json(res, status, body) {
   const data = JSON.stringify(body);
@@ -460,14 +460,19 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
   }
 
   if (subpath === '/clash' && method === 'GET') {
-    return json(res, 200, getClashStatus(true));
+    try {
+      return json(res, 200, await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true }));
+    } catch (err) {
+      return json(res, 200, { ...getClashStatus(true), proxyGroups: [], proxyGroupsError: err.message });
+    }
   }
 
   if (subpath === '/clash' && method === 'PUT') {
     try {
       const wasRunning = getClashStatus().running;
       updateClashConfig(body || {});
-      const clash = wasRunning ? await restartClash() : getClashStatus(true);
+      if (wasRunning) await restartClash();
+      const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
       return json(res, 200, { success: true, clash });
     } catch (err) {
       return json(res, 400, { error: err.message, clash: getClashStatus(true) });
@@ -476,7 +481,8 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
 
   if (subpath === '/clash/start' && method === 'POST') {
     try {
-      const clash = await startClash();
+      await startClash();
+      const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
       return json(res, 200, { success: true, clash });
     } catch (err) {
       return json(res, 400, { error: err.message, clash: getClashStatus(true) });
@@ -494,7 +500,8 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
 
   if (subpath === '/clash/restart' && method === 'POST') {
     try {
-      const clash = await restartClash();
+      await restartClash();
+      const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
       return json(res, 200, { success: true, clash });
     } catch (err) {
       return json(res, 400, { error: err.message, clash: getClashStatus(true) });
@@ -503,7 +510,18 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
 
   if (subpath === '/clash/sync' && method === 'POST') {
     try {
-      const clash = await syncClashProfile();
+      await syncClashProfile(body || null);
+      const clash = await getClashDashboardState({ includeProfileBody: true, includeProxyGroups: true });
+      return json(res, 200, { success: true, clash });
+    } catch (err) {
+      return json(res, 400, { error: err.message, clash: getClashStatus(true) });
+    }
+  }
+
+  if (subpath === '/clash/select' && method === 'POST') {
+    try {
+      const { groupName, proxyName } = body || {};
+      const clash = await selectClashProxy(groupName, proxyName);
       return json(res, 200, { success: true, clash });
     } catch (err) {
       return json(res, 400, { error: err.message, clash: getClashStatus(true) });

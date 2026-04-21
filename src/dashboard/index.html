@@ -1460,9 +1460,23 @@ window._firebaseOAuth = async function(provider) {
       <div class="section-body">
         <textarea id="clash-profile-body" class="input" style="width:100%;min-height:320px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.5" placeholder="proxies:\n  - name: example\n    type: http\n    server: 1.2.3.4\n    port: 443"></textarea>
         <div class="field-row-actions">
-          <button class="btn btn-primary" onclick="App.saveClash()">保存配置</button>
-          <button class="btn btn-outline" onclick="App.syncClashProfile()">同步订阅</button>
+          <button class="btn btn-primary" onclick="App.saveClash()">保存本地配置</button>
+          <button class="btn btn-outline" onclick="App.syncClashProfile()">导入 / 刷新订阅</button>
         </div>
+        <div id="clash-subscription-summary" class="text-sm text-muted" style="margin-top:10px">未导入订阅</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <div class="section-title">代理组 / 节点选择</div>
+          <div class="section-desc">启动并加载订阅后，这里会显示 Mihomo 当前代理组和可选节点。切换后会立即应用，并依赖 Mihomo 的 store-selected 持久化选择。</div>
+        </div>
+      </div>
+      <div class="section-body">
+        <div id="clash-groups-summary" class="text-sm text-muted">启动并成功加载订阅后可在此选节点</div>
+        <div id="clash-proxy-groups" style="display:grid;gap:12px;margin-top:12px"></div>
       </div>
     </div>
   </section>
@@ -2922,7 +2936,22 @@ const App = {
     document.getElementById('clash-profile-url').value = d.profileUrl || '';
     document.getElementById('clash-profile-body').value = d.profileBody || '';
     this.renderClashStatus(d);
+    this.renderClashSubscription(d);
+    this.renderClashProxyGroups(d);
     this.poll('clash', () => this.refreshClashStatus(), 10000);
+  },
+
+  collectClashForm() {
+    return {
+      enabled: document.getElementById('clash-enabled').checked,
+      autoStart: document.getElementById('clash-auto-start').checked,
+      takeoverEnabled: document.getElementById('clash-takeover-enabled').checked,
+      binaryPath: document.getElementById('clash-binary-path').value.trim(),
+      mixedPort: parseInt(document.getElementById('clash-mixed-port').value, 10) || 7890,
+      controllerPort: parseInt(document.getElementById('clash-controller-port').value, 10) || 9090,
+      profileUrl: document.getElementById('clash-profile-url').value.trim(),
+      profileBody: document.getElementById('clash-profile-body').value,
+    };
   },
 
   renderClashStatus(d) {
@@ -2935,7 +2964,8 @@ const App = {
     const takeover = d.effectiveTakeover
       ? '<span style="color:var(--accent)">已接管</span>'
       : '<span class="text-sm text-dim">未接管</span>';
-    statusEl.innerHTML = `状态：${running} · 接管：${takeover} · 代理：<code>127.0.0.1:${this.esc(String(d.mixedPort || ''))}</code>`;
+    const version = d.controllerVersion?.version ? ` · 版本：<code>${this.esc(String(d.controllerVersion.version))}</code>` : '';
+    statusEl.innerHTML = `状态：${running} · 接管：${takeover} · 代理：<code>127.0.0.1:${this.esc(String(d.mixedPort || ''))}</code>${version}`;
     metaEl.textContent = JSON.stringify({
       running: !!d.running,
       ready: !!d.ready,
@@ -2952,25 +2982,96 @@ const App = {
       runtimeFile: d.runtimeFile || '',
       stateFile: d.stateFile || '',
       lastError: d.lastError || '',
+      controllerVersion: d.controllerVersion || null,
+      proxyGroupCount: Array.isArray(d.proxyGroups) ? d.proxyGroups.length : 0,
+      proxyGroupsError: d.proxyGroupsError || '',
     }, null, 2);
+  },
+
+  renderClashSubscription(d) {
+    const el = document.getElementById('clash-subscription-summary');
+    if (!el) return;
+    const parts = [];
+    parts.push(d.profileUrl ? `订阅地址：${this.esc(d.profileUrl)}` : '未设置订阅地址');
+    parts.push(d.hasProfile ? '本地 Profile 已存在' : '尚未导入本地 Profile');
+    if (d.lastSyncAt) parts.push(`上次同步：${this.esc(new Date(d.lastSyncAt).toLocaleString())}`);
+    if (Array.isArray(d.proxyGroups) && d.proxyGroups.length) parts.push(`代理组：${d.proxyGroups.length}`);
+    if (d.proxyGroupsError) parts.push(`节点读取失败：${this.esc(d.proxyGroupsError)}`);
+    el.innerHTML = parts.join(' · ');
+  },
+
+  renderClashProxyGroups(d) {
+    const summaryEl = document.getElementById('clash-groups-summary');
+    const container = document.getElementById('clash-proxy-groups');
+    if (!summaryEl || !container) return;
+    if (!d.running || !d.ready) {
+      summaryEl.textContent = d.hasProfile ? '订阅已准备，启动 Clash 后即可选择节点' : '请先导入订阅并启动 Clash';
+      container.innerHTML = '';
+      return;
+    }
+    const groups = Array.isArray(d.proxyGroups) ? d.proxyGroups : [];
+    if (d.proxyGroupsError) {
+      summaryEl.textContent = `节点读取失败：${d.proxyGroupsError}`;
+      container.innerHTML = '';
+      return;
+    }
+    if (!groups.length) {
+      summaryEl.textContent = '当前没有可选的代理组，可能是订阅尚未加载完成或配置里没有 selector/url-test/fallback 组';
+      container.innerHTML = '';
+      return;
+    }
+    summaryEl.textContent = `共 ${groups.length} 个代理组，切换后会即时应用。`;
+    container.innerHTML = groups.map((group, index) => {
+      const selectId = `clash-group-select-${index}`;
+      const options = (group.options || []).map((option) => {
+        const badges = [option.type || ''];
+        if (option.alive === true) badges.push('在线');
+        if (option.alive === false) badges.push('离线');
+        if (typeof option.delay === 'number' && option.delay >= 0) badges.push(`${option.delay}ms`);
+        const label = badges.filter(Boolean).length ? `${option.name} (${badges.filter(Boolean).join(' · ')})` : option.name;
+        return `<option value="${this.esc(option.name)}" ${option.name === group.current ? 'selected' : ''}>${this.esc(label)}</option>`;
+      }).join('');
+      return `
+        <div style="border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--surface-1)">
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+            <div>
+              <div style="font-weight:600">${this.esc(group.name)}</div>
+              <div class="text-sm text-muted">类型：${this.esc(group.type || '-')} · 当前：<code>${this.esc(group.current || '-')}</code> · 选项：${this.esc(String(group.optionCount || 0))}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select id="${selectId}" class="select" style="min-width:280px;flex:1">${options}</select>
+            <button class="btn btn-primary btn-sm" onclick="App.selectClashNode('${this.escJsAttr(group.name)}','${selectId}')">切换节点</button>
+          </div>
+        </div>`;
+    }).join('');
+  },
+
+  async selectClashNode(groupName, selectId) {
+    const select = document.getElementById(selectId);
+    const proxyName = select?.value || '';
+    if (!groupName || !proxyName) return this.toast('请选择要切换的节点', 'error');
+    const r = await this.api('POST', '/clash/select', { groupName, proxyName });
+    if (r.error) return this.toast(r.error, 'error');
+    this.toast(`已切换 ${groupName} -> ${proxyName}`);
+    if (r.clash) {
+      this.renderClashStatus(r.clash);
+      this.renderClashSubscription(r.clash);
+      this.renderClashProxyGroups(r.clash);
+    } else {
+      this.loadClash();
+    }
   },
 
   async refreshClashStatus() {
     const d = await this.api('GET', '/clash');
     this.renderClashStatus(d);
+    this.renderClashSubscription(d);
+    this.renderClashProxyGroups(d);
   },
 
   async saveClash() {
-    const body = {
-      enabled: document.getElementById('clash-enabled').checked,
-      autoStart: document.getElementById('clash-auto-start').checked,
-      takeoverEnabled: document.getElementById('clash-takeover-enabled').checked,
-      binaryPath: document.getElementById('clash-binary-path').value.trim(),
-      mixedPort: parseInt(document.getElementById('clash-mixed-port').value, 10) || 7890,
-      controllerPort: parseInt(document.getElementById('clash-controller-port').value, 10) || 9090,
-      profileUrl: document.getElementById('clash-profile-url').value.trim(),
-      profileBody: document.getElementById('clash-profile-body').value,
-    };
+    const body = this.collectClashForm();
     const r = await this.api('PUT', '/clash', body);
     if (r.error) return this.toast(r.error, 'error');
     this.toast('Clash 配置已保存');
@@ -2999,9 +3100,9 @@ const App = {
   },
 
   async syncClashProfile() {
-    const r = await this.api('POST', '/clash/sync', {});
+    const r = await this.api('POST', '/clash/sync', this.collectClashForm());
     if (r.error) return this.toast(r.error, 'error');
-    this.toast('Clash 订阅已同步');
+    this.toast('Clash 订阅已导入 / 刷新');
     this.loadClash();
   },
 

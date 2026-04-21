@@ -27,6 +27,7 @@ let _ready = false;
 let _startedAt = 0;
 let _lastExit = null;
 let _startPromise = null;
+const GROUP_PROXY_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 
 function parseBool(value, fallback = false) {
   if (value == null || value === '') return fallback;
@@ -56,6 +57,32 @@ function upsertTopLevel(yaml, key, rawValue) {
   const pattern = new RegExp(`^${escapeRegex(key)}\\s*:.*$`, 'm');
   if (pattern.test(yaml)) return yaml.replace(pattern, line);
   return `${line}\n${yaml}`;
+}
+
+function upsertNestedKey(yaml, parentKey, childKey, rawValue) {
+  const lines = yaml.split('\n');
+  const parentIndex = lines.findIndex(line => line.trim() === `${parentKey}:`);
+  if (parentIndex === -1) {
+    return `${parentKey}:\n  ${childKey}: ${rawValue}\n${yaml}`;
+  }
+  let blockEnd = parentIndex + 1;
+  while (blockEnd < lines.length) {
+    const line = lines[blockEnd];
+    if (!line.trim()) {
+      blockEnd += 1;
+      continue;
+    }
+    if (!/^[ \t]+/.test(line)) break;
+    blockEnd += 1;
+  }
+  for (let i = parentIndex + 1; i < blockEnd; i += 1) {
+    if (lines[i].trim().startsWith(`${childKey}:`)) {
+      lines[i] = `  ${childKey}: ${rawValue}`;
+      return lines.join('\n');
+    }
+  }
+  lines.splice(parentIndex + 1, 0, `  ${childKey}: ${rawValue}`);
+  return lines.join('\n');
 }
 
 function readProfileBody() {
@@ -91,6 +118,8 @@ function buildRuntimeConfig() {
   runtime = upsertTopLevel(runtime, 'log-level', yamlString(_state.logLevel));
   runtime = upsertTopLevel(runtime, 'external-controller', yamlString(`127.0.0.1:${_state.controllerPort}`));
   runtime = upsertTopLevel(runtime, 'secret', yamlString(_state.secret));
+  runtime = upsertNestedKey(runtime, 'profile', 'store-selected', 'true');
+  runtime = upsertNestedKey(runtime, 'profile', 'store-fake-ip', 'true');
   writeFileSync(config.clashRuntimeFile, runtime, 'utf8');
   return runtime;
 }
@@ -194,34 +223,83 @@ async function downloadText(url, depth = 0) {
   });
 }
 
-async function fetchControllerVersion() {
+async function controllerRequest(path, { method = 'GET', body = null, timeout = 4000 } = {}) {
   return new Promise((resolve, reject) => {
+    const payload = body == null ? '' : JSON.stringify(body);
     const req = http.request({
       host: '127.0.0.1',
       port: _state.controllerPort,
-      path: '/version',
-      method: 'GET',
-      timeout: 2000,
-      headers: _state.secret ? { Authorization: `Bearer ${_state.secret}` } : {},
+      path,
+      method,
+      timeout,
+      headers: {
+        Accept: 'application/json',
+        ...(_state.secret ? { Authorization: `Bearer ${_state.secret}` } : {}),
+        ...(body == null ? {} : {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        }),
+      },
     }, (res) => {
       const bufs = [];
       res.on('data', (d) => bufs.push(d));
       res.on('end', () => {
+        const text = Buffer.concat(bufs).toString('utf8');
+        let data = {};
+        if (text) {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text;
+          }
+        }
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          reject(new Error(`Controller /version returned ${res.statusCode}`));
+          const detail = typeof data === 'string' ? data : JSON.stringify(data).slice(0, 240);
+          reject(new Error(`Clash controller ${method} ${path} failed (${res.statusCode}): ${detail}`));
           return;
         }
-        try {
-          resolve(JSON.parse(Buffer.concat(bufs).toString('utf8') || '{}'));
-        } catch (err) {
-          reject(err);
-        }
+        resolve(data);
       });
     });
-    req.on('timeout', () => req.destroy(new Error('Controller timeout')));
+    req.on('timeout', () => req.destroy(new Error(`Clash controller timeout: ${method} ${path}`)));
     req.on('error', reject);
+    if (body != null) req.write(payload);
     req.end();
   });
+}
+
+async function fetchControllerVersion() {
+  return controllerRequest('/version', { timeout: 2000 });
+}
+
+function normalizeClashGroups(payload) {
+  const proxies = payload?.proxies && typeof payload.proxies === 'object' ? payload.proxies : {};
+  return Object.entries(proxies)
+    .filter(([name, proxy]) => {
+      if (!proxy || !Array.isArray(proxy.all) || proxy.all.length === 0) return false;
+      return name === 'GLOBAL' || GROUP_PROXY_TYPES.has(String(proxy.type || ''));
+    })
+    .sort(([a], [b]) => {
+      if (a === 'GLOBAL') return -1;
+      if (b === 'GLOBAL') return 1;
+      return a.localeCompare(b);
+    })
+    .map(([name, proxy]) => ({
+      name,
+      type: String(proxy.type || ''),
+      current: String(proxy.now || ''),
+      optionCount: Array.isArray(proxy.all) ? proxy.all.length : 0,
+      options: (proxy.all || []).map((optionName) => {
+        const child = proxies[optionName] || null;
+        const history = Array.isArray(child?.history) ? child.history[child.history.length - 1] : null;
+        return {
+          name: String(optionName),
+          type: String(child?.type || ''),
+          alive: typeof child?.alive === 'boolean' ? child.alive : null,
+          delay: Number.isFinite(history?.delay) ? history.delay : null,
+        };
+      }),
+    }));
 }
 
 async function waitUntilReady(timeoutMs = 20000) {
@@ -318,6 +396,42 @@ export function getClashStatus(includeProfileBody = false) {
   return status;
 }
 
+export async function getClashDashboardState({ includeProfileBody = false, includeProxyGroups = true } = {}) {
+  const state = {
+    ...getClashStatus(includeProfileBody),
+    controllerVersion: null,
+    controllerConfig: null,
+    proxyGroups: [],
+    proxyGroupsError: '',
+  };
+  if (!state.running || !state.ready) return state;
+  const [version, controllerConfig, proxies] = await Promise.all([
+    fetchControllerVersion().catch((err) => {
+      state.lastError = err.message;
+      return null;
+    }),
+    controllerRequest('/configs').catch(() => null),
+    includeProxyGroups ? controllerRequest('/proxies').catch((err) => {
+      state.proxyGroupsError = err.message;
+      return null;
+    }) : Promise.resolve(null),
+  ]);
+  state.controllerVersion = version;
+  state.controllerConfig = controllerConfig;
+  if (proxies) state.proxyGroups = normalizeClashGroups(proxies);
+  return state;
+}
+
+export async function selectClashProxy(groupName, proxyName) {
+  if (!groupName || !proxyName) throw new Error('groupName and proxyName are required');
+  if (!_ready || !isRunning()) throw new Error('Clash is not running');
+  await controllerRequest(`/proxies/${encodeURIComponent(groupName)}`, {
+    method: 'PUT',
+    body: { name: proxyName },
+  });
+  return getClashDashboardState({ includeProfileBody: false, includeProxyGroups: true });
+}
+
 export function updateClashConfig(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, 'enabled')) _state.enabled = parseBool(patch.enabled, _state.enabled);
   if (Object.prototype.hasOwnProperty.call(patch, 'autoStart')) _state.autoStart = parseBool(patch.autoStart, _state.autoStart);
@@ -338,7 +452,10 @@ export function updateClashConfig(patch = {}) {
   return getClashStatus(true);
 }
 
-export async function syncClashProfile() {
+export async function syncClashProfile(patch = null) {
+  if (patch && typeof patch === 'object' && Object.keys(patch).length > 0) {
+    updateClashConfig(patch);
+  }
   if (!_state.profileUrl) throw new Error('Clash profileUrl is empty');
   const body = await downloadText(_state.profileUrl);
   if (!body.trim()) throw new Error('Downloaded Clash profile is empty');
