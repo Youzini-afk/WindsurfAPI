@@ -108,6 +108,10 @@ export function getEffectiveProxy(accountId) {
   return _config.global;
 }
 
+export function hasAccountProxy(accountId) {
+  return !!(accountId && _config.perAccount[accountId]);
+}
+
 export async function prepareEffectiveProxy(accountId, options = {}) {
   const leased = await prepareEffectiveProxyLeased(accountId, options);
   return leased.proxy;
