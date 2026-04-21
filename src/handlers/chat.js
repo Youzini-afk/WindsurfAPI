@@ -14,7 +14,7 @@ import { isModelAllowed } from '../dashboard/model-access.js';
 import { cacheKey, cacheGet, cacheSet } from '../cache.js';
 import { isExperimentalEnabled, getIdentityPromptFor } from '../runtime-config.js';
 import { checkMessageRateLimit } from '../windsurf-api.js';
-import { acquireClashStreamGuard, releaseClashStreamGuard } from '../clash.js';
+import { acquireClashStreamGuard, releaseClashStreamGuard, isClashRetrySwitchEnabled } from '../clash.js';
 import { prepareEffectiveProxyLeased, hasAccountProxy } from '../dashboard/proxy-config.js';
 import {
   fingerprintBefore, fingerprintAfter, checkout as poolCheckout, checkin as poolCheckin,
@@ -305,10 +305,20 @@ export async function handleChatCompletions(body) {
     Math.max(1, config.chatMaxAccountAttempts || 10),
     Math.max(3, getAccountList().filter(a => a.status === 'active').length),
   );
+  const retrySwitchEnabled = isClashRetrySwitchEnabled();
   let sharedRequestProxy = null;
-  const getSharedRequestProxy = async () => {
+  const getSharedRequestProxy = async ({ refresh = false } = {}) => {
+    if (refresh && sharedRequestProxy) {
+      sharedRequestProxy.release?.();
+      sharedRequestProxy = null;
+    }
     if (!sharedRequestProxy) {
-      sharedRequestProxy = await prepareEffectiveProxyLeased(null, { reason: 'chat_request', modelKey, mode: 'slot' });
+      sharedRequestProxy = await prepareEffectiveProxyLeased(null, {
+        reason: refresh ? 'chat_retry_attempt' : 'chat_request',
+        modelKey,
+        mode: 'slot',
+        forceSwitch: refresh,
+      });
     }
     return sharedRequestProxy;
   };
@@ -328,9 +338,10 @@ export async function handleChatCompletions(body) {
         if (!acct) break;
       }
       tried.push(acct.apiKey);
-      const leasedProxy = hasAccountProxy(acct.id)
+      const accountHasOwnProxy = hasAccountProxy(acct.id);
+      const leasedProxy = accountHasOwnProxy
         ? await prepareEffectiveProxyLeased(acct.id, { reason: 'chat_attempt', modelKey, mode: 'slot' })
-        : await getSharedRequestProxy();
+        : await getSharedRequestProxy({ refresh: retrySwitchEnabled && attempt > 0 });
       acct.proxy = leasedProxy.proxy || null;
 
       // Pre-flight rate limit check (experimental): ask server.codeium.com if
@@ -639,13 +650,33 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
         Math.max(1, config.chatMaxAccountAttempts || 10),
         Math.max(3, getAccountList().filter(a => a.status === 'active').length),
       );
+      const retrySwitchEnabled = isClashRetrySwitchEnabled();
       let sharedRequestProxy = null;
       let sharedRequestClashGuardToken = '';
-      const getSharedRequestProxy = async () => {
+      const resetSharedRequestProxy = () => {
+        if (sharedRequestClashGuardToken) {
+          releaseClashStreamGuard(sharedRequestClashGuardToken);
+          sharedRequestClashGuardToken = '';
+        }
+        sharedRequestProxy?.release?.();
+        sharedRequestProxy = null;
+      };
+      const getSharedRequestProxy = async ({ refresh = false } = {}) => {
+        if (refresh && sharedRequestProxy) {
+          resetSharedRequestProxy();
+        }
         if (!sharedRequestProxy) {
-          sharedRequestProxy = await prepareEffectiveProxyLeased(null, { reason: 'chat_stream_request', modelKey, mode: 'slot' });
+          sharedRequestProxy = await prepareEffectiveProxyLeased(null, {
+            reason: refresh ? 'chat_stream_retry_attempt' : 'chat_stream_request',
+            modelKey,
+            mode: 'slot',
+            forceSwitch: refresh,
+          });
           if (sharedRequestProxy?.proxy?.source === 'clash' && !sharedRequestClashGuardToken) {
-            sharedRequestClashGuardToken = acquireClashStreamGuard({ modelKey, reason: 'chat_stream_request' });
+            sharedRequestClashGuardToken = acquireClashStreamGuard({
+              modelKey,
+              reason: refresh ? 'chat_stream_retry_request' : 'chat_stream_request',
+            });
           }
         }
         return sharedRequestProxy;
@@ -769,9 +800,10 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
           }
           tried.push(acct.apiKey);
           currentApiKey = acct.apiKey;
-          const leasedProxy = hasAccountProxy(acct.id)
+          const accountHasOwnProxy = hasAccountProxy(acct.id);
+          const leasedProxy = accountHasOwnProxy
             ? await prepareEffectiveProxyLeased(acct.id, { reason: 'chat_stream_attempt', modelKey, mode: 'slot' })
-            : await getSharedRequestProxy();
+            : await getSharedRequestProxy({ refresh: retrySwitchEnabled && attempt > 0 });
           acct.proxy = leasedProxy.proxy || null;
           let clashStreamGuardToken = '';
 
@@ -947,10 +979,7 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
         } catch {}
         if (!res.writableEnded) res.end();
       } finally {
-        if (sharedRequestClashGuardToken) {
-          releaseClashStreamGuard(sharedRequestClashGuardToken);
-        }
-        sharedRequestProxy?.release?.();
+        resetSharedRequestProxy();
         stopHeartbeat();
       }
     },

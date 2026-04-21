@@ -38,6 +38,7 @@ const DEFAULT_STATE = {
   currentProxy: '',
   lastStoppedAt: 0,
   randomNodeEnabled: false,
+  randomRetrySwitchEnabled: false,
   randomExcludedNodes: [],
   randomMinDelayMs: 0,
   randomMaxDelayMs: 0,
@@ -518,6 +519,7 @@ function loadState() {
   state.currentProxy = safeString(state.currentProxy, '');
   state.lastStoppedAt = parseInt(state.lastStoppedAt || '0', 10) || 0;
   state.randomNodeEnabled = parseBool(state.randomNodeEnabled, DEFAULT_STATE.randomNodeEnabled);
+  state.randomRetrySwitchEnabled = parseBool(state.randomRetrySwitchEnabled, DEFAULT_STATE.randomRetrySwitchEnabled);
   state.randomExcludedNodes = normalizeStringList(state.randomExcludedNodes);
   state.randomMinDelayMs = normalizeNonNegativeInt(state.randomMinDelayMs, DEFAULT_STATE.randomMinDelayMs);
   state.randomMaxDelayMs = normalizeNonNegativeInt(state.randomMaxDelayMs, DEFAULT_STATE.randomMaxDelayMs);
@@ -567,6 +569,7 @@ function saveState() {
     currentProxy: _state.currentProxy,
     lastStoppedAt: _state.lastStoppedAt,
     randomNodeEnabled: _state.randomNodeEnabled,
+    randomRetrySwitchEnabled: _state.randomRetrySwitchEnabled,
     randomExcludedNodes: _state.randomExcludedNodes,
     randomMinDelayMs: _state.randomMinDelayMs,
     randomMaxDelayMs: _state.randomMaxDelayMs,
@@ -761,6 +764,10 @@ function getRandomTargetGroup(selectedGroup = '') {
   return safeString(selectedGroup || _state.currentGroup || _state.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME;
 }
 
+function hasRandomSwitchRuntime() {
+  return !!_state.randomNodeEnabled || !!_state.randomRetrySwitchEnabled;
+}
+
 function hasRandomDelayFilter() {
   return normalizeNonNegativeInt(_state.randomMinDelayMs, 0) > 0 || normalizeNonNegativeInt(_state.randomMaxDelayMs, 0) > 0;
 }
@@ -804,7 +811,7 @@ function stopAutoDelayTimer() {
 
 function scheduleAutoDelayTimer() {
   stopAutoDelayTimer();
-  if (!_state.randomNodeEnabled || !_ready || !isRunning()) return;
+  if (!hasRandomSwitchRuntime() || !_ready || !isRunning()) return;
   const intervalMinutes = normalizeNonNegativeInt(_state.randomDelayCheckIntervalMinutes, 0);
   if (!intervalMinutes) return;
   _autoDelayTimer = setInterval(() => {
@@ -820,6 +827,7 @@ function buildRandomStatus(groups = [], selectedGroup = '') {
   const candidates = group ? getRandomCandidateNodes(group, cacheEntry.results) : [];
   return {
     enabled: !!_state.randomNodeEnabled,
+    retrySwitchEnabled: !!_state.randomRetrySwitchEnabled,
     groupName,
     excludedCount: _state.randomExcludedNodes.length,
     minDelayMs: _state.randomMinDelayMs,
@@ -847,7 +855,12 @@ export function getClashProxy() {
     username: '',
     password: '',
     source: 'clash',
+    currentProxy: _state.currentProxy,
   };
+}
+
+export function isClashRetrySwitchEnabled() {
+  return !!_state.randomRetrySwitchEnabled;
 }
 
 export function getClashStatus(includeProfileBody = false) {
@@ -886,6 +899,7 @@ export function getClashStatus(includeProfileBody = false) {
     currentProxy: _state.currentProxy,
     subscriptionConfigured: !!_state.subscriptionUrl,
     randomNodeEnabled: _state.randomNodeEnabled,
+    randomRetrySwitchEnabled: _state.randomRetrySwitchEnabled,
     randomExcludedNodes: _state.randomExcludedNodes,
     randomMinDelayMs: _state.randomMinDelayMs,
     randomMaxDelayMs: _state.randomMaxDelayMs,
@@ -975,6 +989,9 @@ export function updateClashConfig(patch = {}) {
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'randomNodeEnabled')) {
     _state.randomNodeEnabled = parseBool(patch.randomNodeEnabled, _state.randomNodeEnabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'randomRetrySwitchEnabled')) {
+    _state.randomRetrySwitchEnabled = parseBool(patch.randomRetrySwitchEnabled, _state.randomRetrySwitchEnabled);
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'randomExcludedNodes')) {
     _state.randomExcludedNodes = normalizeStringList(patch.randomExcludedNodes);
@@ -1136,7 +1153,8 @@ async function ensureRandomDelayCache(groupName) {
 }
 
 async function maybeRandomizeClashNode(meta = {}) {
-  if (!_state.randomNodeEnabled || !_ready || !isRunning()) {
+  const allowSwitch = _state.randomNodeEnabled || parseBool(meta?.forceSwitch, false);
+  if (!allowSwitch || !_ready || !isRunning()) {
     return { switched: false, proxy: _state.currentProxy || '', groupName: getRandomTargetGroup() };
   }
   if (_randomSwitchPromise) return _randomSwitchPromise;
@@ -1228,7 +1246,8 @@ async function maybeRandomizeSlotNode(slotState, meta = {}) {
       unavailable: true,
     };
   }
-  if (!_state.randomNodeEnabled) {
+  const allowSwitch = _state.randomNodeEnabled || parseBool(meta?.forceSwitch, false);
+  if (!allowSwitch) {
     const currentProxy = safeString(targetGroup.now || slotState.currentProxy || '', '');
     slotState.currentProxy = currentProxy;
     slotState.lastUsedAt = Date.now();
@@ -1370,7 +1389,7 @@ export async function startClash() {
     saveState();
     await getClashGroups().catch(() => null);
     scheduleAutoDelayTimer();
-    if (_state.randomNodeEnabled && normalizeNonNegativeInt(_state.randomDelayCheckIntervalMinutes, 0) > 0) {
+    if (hasRandomSwitchRuntime() && normalizeNonNegativeInt(_state.randomDelayCheckIntervalMinutes, 0) > 0) {
       refreshRandomDelayCache().catch(err => log.warn(`Clash initial auto delay test failed: ${err.message}`));
     }
     log.info(`Clash ready on mixed-port ${_state.mixedPort}`);

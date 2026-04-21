@@ -1499,6 +1499,11 @@ window._firebaseOAuth = async function(provider) {
             <span class="box"></span>
             <span>向外请求前随机切换节点</span>
           </label>
+          <label class="checkbox">
+            <input type="checkbox" id="clash-random-retry-switch-enabled">
+            <span class="box"></span>
+            <span>轮询下一个账号时切换节点</span>
+          </label>
         </div>
         <div class="field-row mt-3">
           <div class="field" style="max-width:180px">
@@ -3089,6 +3094,7 @@ const App = {
     document.getElementById('clash-test-url').value = d.testUrl || 'https://www.gstatic.com/generate_204';
     document.getElementById('clash-secret').value = d.secret || '';
     document.getElementById('clash-random-node-enabled').checked = !!d.randomNodeEnabled;
+    document.getElementById('clash-random-retry-switch-enabled').checked = !!d.randomRetrySwitchEnabled;
     document.getElementById('clash-random-min-delay').value = d.randomMinDelayMs || 0;
     document.getElementById('clash-random-max-delay').value = d.randomMaxDelayMs || 0;
     document.getElementById('clash-random-delay-interval').value = d.randomDelayCheckIntervalMinutes ?? 10;
@@ -3102,6 +3108,7 @@ const App = {
   collectClashRandomForm() {
     return {
       randomNodeEnabled: document.getElementById('clash-random-node-enabled').checked,
+      randomRetrySwitchEnabled: document.getElementById('clash-random-retry-switch-enabled').checked,
       randomMinDelayMs: parseInt(document.getElementById('clash-random-min-delay').value, 10) || 0,
       randomMaxDelayMs: parseInt(document.getElementById('clash-random-max-delay').value, 10) || 0,
       randomDelayCheckIntervalMinutes: parseInt(document.getElementById('clash-random-delay-interval').value, 10) || 0,
@@ -3163,16 +3170,21 @@ const App = {
     const randomStatus = d.randomStatus || {};
     const summaryEl = document.getElementById('clash-random-summary');
     if (!summaryEl) return;
-    if (!d.randomNodeEnabled) {
+    if (!d.randomNodeEnabled && !d.randomRetrySwitchEnabled) {
       summaryEl.textContent = '未启用随机节点';
       return;
     }
     const parts = [
-      '已启用随机节点',
+      d.randomNodeEnabled ? '已启用随机节点' : '已启用重试切节点',
       `策略组：${randomStatus.groupName || d.currentGroup || d.groupName || '-'}`,
       `候选 ${randomStatus.eligibleCount || 0} 个`,
       `排除 ${randomStatus.excludedCount || 0} 个`,
     ];
+    if (d.randomNodeEnabled && d.randomRetrySwitchEnabled) {
+      parts.push('普通请求与重试切号都会切节点');
+    } else if (d.randomRetrySwitchEnabled) {
+      parts.push('仅轮询下一个账号时切节点');
+    }
     if ((d.randomMinDelayMs || 0) > 0 || (d.randomMaxDelayMs || 0) > 0) {
       const minDelayText = (d.randomMinDelayMs || 0) > 0 ? String(d.randomMinDelayMs) : '0';
       const maxDelayText = (d.randomMaxDelayMs || 0) > 0 ? String(d.randomMaxDelayMs) : '∞';
