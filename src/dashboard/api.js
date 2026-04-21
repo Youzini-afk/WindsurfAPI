@@ -18,7 +18,7 @@ import { cacheStats, cacheClear } from '../cache.js';
 import { getExperimental, setExperimental, getIdentityPrompts, setIdentityPrompts, resetIdentityPrompt, DEFAULT_IDENTITY_PROMPTS } from '../runtime-config.js';
 import { poolStats as convPoolStats, poolClear as convPoolClear } from '../conversation-pool.js';
 import { getLogs, subscribeToLogs, unsubscribeFromLogs } from './logger.js';
-import { getProxyConfig, getProxyConfigMasked, setGlobalProxy, setAccountProxy, removeProxy, getEffectiveProxy } from './proxy-config.js';
+import { getProxyConfigMasked, setGlobalProxy, setAccountProxy, removeProxy, prepareEffectiveProxy } from './proxy-config.js';
 import { MODELS, MODEL_TIER_ACCESS as _TIER_TABLE, getTierModels as _getTierModels } from '../models.js';
 import { windsurfLogin, refreshFirebaseToken, reRegisterWithCodeium } from './windsurf-login.js';
 import { getModelAccessConfig, setModelAccessMode, setModelAccessList, addModelToList, removeModelFromList } from './model-access.js';
@@ -95,7 +95,7 @@ async function executeWindsurfLogin({ email, password, loginProxy, autoAdd }) {
     err.statusCode = 400;
     throw err;
   }
-  const proxy = loginProxy?.host ? loginProxy : (getEffectiveProxy() || null);
+  const proxy = loginProxy?.host ? loginProxy : (await prepareEffectiveProxy(null, { reason: 'windsurf_login' }) || null);
   const result = await windsurfLogin(email, password, proxy);
   let account = null;
   if (autoAdd !== false) {
@@ -480,6 +480,16 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
     }
   }
 
+  if (subpath === '/clash/random-config' && method === 'PUT') {
+    try {
+      updateClashConfig(body || {});
+      const clash = await getClashDashboardState();
+      return json(res, 200, { success: true, clash });
+    } catch (err) {
+      return json(res, 400, { error: err.message, clash: getClashStatus() });
+    }
+  }
+
   if (subpath === '/clash/start' && method === 'POST') {
     try {
       if (body && typeof body === 'object' && Object.keys(body).length > 0) {
@@ -730,7 +740,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       const { idToken, refreshToken, email, provider, autoAdd } = body;
       if (!idToken) return json(res, 400, { error: '缺少 idToken' });
 
-      const proxy = getEffectiveProxy() || null;
+      const proxy = await prepareEffectiveProxy(null, { reason: 'windsurf_re_register' }) || null;
       const { apiKey, name } = await reRegisterWithCodeium(idToken, proxy);
 
       let account = null;
@@ -759,16 +769,16 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
   // ─── Rate Limit Check ──────────────────────────────────
   // POST /accounts/:id/rate-limit — check capacity for a single account
   const rateLimitCheck = subpath.match(/^\/accounts\/([^/]+)\/rate-limit$/);
-  if (rateLimitCheck && method === 'POST') {
+  if (rateLimitCheck && method === 'GET') {
     const list = getAccountList();
     const acct = list.find(a => a.id === rateLimitCheck[1]);
     if (!acct) return json(res, 404, { error: 'Account not found' });
     try {
-      const proxy = getEffectiveProxy(acct.id) || null;
+      const proxy = await prepareEffectiveProxy(acct.id, { reason: 'dashboard_rate_limit_check' }) || null;
       const result = await checkMessageRateLimit(acct.apiKey, proxy);
       return json(res, 200, { success: true, account: acct.email, ...result });
     } catch (err) {
-      return json(res, 500, { error: err.message });
+      return json(res, 400, { error: err.message });
     }
   }
 
@@ -781,7 +791,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
     if (!acct) return json(res, 404, { error: 'Account not found' });
     if (!acct.refreshToken) return json(res, 400, { error: 'Account has no refresh token' });
     try {
-      const proxy = getEffectiveProxy(acct.id) || null;
+      const proxy = await prepareEffectiveProxy(acct.id, { reason: 'dashboard_refresh_firebase' }) || null;
       const { idToken, refreshToken: newRefresh } = await refreshFirebaseToken(acct.refreshToken, proxy);
       const { apiKey } = await reRegisterWithCodeium(idToken, proxy);
       const keyChanged = apiKey && apiKey !== acct.apiKey;

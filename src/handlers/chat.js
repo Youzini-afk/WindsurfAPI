@@ -14,7 +14,7 @@ import { isModelAllowed } from '../dashboard/model-access.js';
 import { cacheKey, cacheGet, cacheSet } from '../cache.js';
 import { isExperimentalEnabled, getIdentityPromptFor } from '../runtime-config.js';
 import { checkMessageRateLimit } from '../windsurf-api.js';
-import { getEffectiveProxy } from '../dashboard/proxy-config.js';
+import { prepareEffectiveProxy } from '../dashboard/proxy-config.js';
 import {
   fingerprintBefore, fingerprintAfter, checkout as poolCheckout, checkin as poolCheckin,
 } from '../conversation-pool.js';
@@ -286,13 +286,13 @@ export async function handleChatCompletions(body) {
       if (!acct) break;
     }
     tried.push(acct.apiKey);
+    acct.proxy = await prepareEffectiveProxy(acct.id, { reason: 'chat_attempt', modelKey }) || null;
 
     // Pre-flight rate limit check (experimental): ask server.codeium.com if
     // this account still has message capacity before burning an LS round trip.
     if (isExperimentalEnabled('preflightRateLimit')) {
       try {
-        const px = getEffectiveProxy(acct.id) || null;
-        const rl = await checkMessageRateLimit(acct.apiKey, px);
+        const rl = await checkMessageRateLimit(acct.apiKey, acct.proxy || null);
         if (!rl.hasCapacity) {
           log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
           markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);
@@ -697,12 +697,12 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
           }
           tried.push(acct.apiKey);
           currentApiKey = acct.apiKey;
+          acct.proxy = await prepareEffectiveProxy(acct.id, { reason: 'chat_stream_attempt', modelKey }) || null;
 
           // Pre-flight rate limit check (experimental)
           if (isExperimentalEnabled('preflightRateLimit')) {
             try {
-              const px = getEffectiveProxy(acct.id) || null;
-              const rl = await checkMessageRateLimit(acct.apiKey, px);
+              const rl = await checkMessageRateLimit(acct.apiKey, acct.proxy || null);
               if (!rl.hasCapacity) {
                 log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
                 markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);

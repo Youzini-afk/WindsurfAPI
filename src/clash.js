@@ -10,6 +10,7 @@ const DEFAULT_AUTO_GROUP_NAME = '自动选择';
 const DEFAULT_LOG_LINES = 200;
 const GROUP_PROXY_TYPES = ['selector', 'urltest', 'fallback', 'loadbalance', 'relay'];
 const CLASH_LOG_FILE = resolvePath(config.clashDir, 'mihomo.log');
+const DEFAULT_RANDOM_DELAY_CHECK_INTERVAL_MINUTES = 10;
 
 const DEFAULT_STATE = {
   enabled: config.clashEnabled,
@@ -31,6 +32,16 @@ const DEFAULT_STATE = {
   currentGroup: '',
   currentProxy: '',
   lastStoppedAt: 0,
+  randomNodeEnabled: false,
+  randomExcludedNodes: [],
+  randomMinDelayMs: 0,
+  randomMaxDelayMs: 0,
+  randomDelayCheckIntervalMinutes: DEFAULT_RANDOM_DELAY_CHECK_INTERVAL_MINUTES,
+  randomLastDelayTestAt: 0,
+  randomLastDelayGroup: '',
+  randomLastSwitchAt: 0,
+  randomLastSwitchProxy: '',
+  delayCache: {},
 };
 
 let _proc = null;
@@ -38,6 +49,9 @@ let _ready = false;
 let _startedAt = 0;
 let _lastExit = null;
 let _startPromise = null;
+let _randomSwitchPromise = null;
+const _delayRefreshPromises = new Map();
+let _autoDelayTimer = null;
 
 function parseBool(value, fallback = false) {
   if (value == null || value === '') return fallback;
@@ -55,8 +69,88 @@ function normalizePositiveInt(value, fallback, min = 1) {
   return Number.isFinite(n) && n >= min ? n : fallback;
 }
 
+function normalizeNonNegativeInt(value, fallback = 0) {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 function safeString(value, fallback = '') {
   return String(value ?? fallback).trim();
+}
+
+function normalizeStringList(value) {
+  const items = Array.isArray(value)
+    ? value
+    : String(value || '').split(/[\r\n,，;；]+/);
+  const out = [];
+  const seen = new Set();
+  for (const item of items) {
+    const text = safeString(item, '');
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function normalizeDelayValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function normalizeDelayResults(results) {
+  if (!Array.isArray(results)) return [];
+  return results
+    .map(item => ({
+      name: safeString(item?.name, ''),
+      delay: normalizeDelayValue(item?.delay),
+      error: safeString(item?.error, ''),
+    }))
+    .filter(item => item.name);
+}
+
+function normalizeDelayCache(cache) {
+  if (!cache || typeof cache !== 'object' || Array.isArray(cache)) return {};
+  const out = {};
+  for (const [groupName, entry] of Object.entries(cache)) {
+    const normalizedGroup = safeString(groupName, '');
+    if (!normalizedGroup) continue;
+    out[normalizedGroup] = {
+      testedAt: parseInt(entry?.testedAt || '0', 10) || 0,
+      testUrl: safeString(entry?.testUrl, ''),
+      results: normalizeDelayResults(entry?.results),
+    };
+  }
+  return out;
+}
+
+function clearDelayCache() {
+  _state.delayCache = {};
+  _state.randomLastDelayTestAt = 0;
+  _state.randomLastDelayGroup = '';
+}
+
+function getDelayCacheEntry(groupName) {
+  const normalizedGroup = safeString(groupName, '');
+  const cache = normalizeDelayCache(_state.delayCache);
+  return cache[normalizedGroup] || { testedAt: 0, testUrl: '', results: [] };
+}
+
+function setDelayCacheEntry(groupName, payload) {
+  const normalizedGroup = safeString(groupName, '');
+  if (!normalizedGroup) return { testedAt: 0, testUrl: '', results: [] };
+  const cache = normalizeDelayCache(_state.delayCache);
+  const entry = {
+    testedAt: parseInt(payload?.testedAt || Date.now(), 10) || Date.now(),
+    testUrl: safeString(payload?.testUrl, _state.testUrl),
+    results: normalizeDelayResults(payload?.results),
+  };
+  cache[normalizedGroup] = entry;
+  _state.delayCache = cache;
+  _state.randomLastDelayTestAt = entry.testedAt;
+  _state.randomLastDelayGroup = normalizedGroup;
+  saveState();
+  return entry;
 }
 
 function ensureDirs() {
@@ -188,6 +282,22 @@ function loadState() {
   state.currentGroup = safeString(state.currentGroup, '');
   state.currentProxy = safeString(state.currentProxy, '');
   state.lastStoppedAt = parseInt(state.lastStoppedAt || '0', 10) || 0;
+  state.randomNodeEnabled = parseBool(state.randomNodeEnabled, DEFAULT_STATE.randomNodeEnabled);
+  state.randomExcludedNodes = normalizeStringList(state.randomExcludedNodes);
+  state.randomMinDelayMs = normalizeNonNegativeInt(state.randomMinDelayMs, DEFAULT_STATE.randomMinDelayMs);
+  state.randomMaxDelayMs = normalizeNonNegativeInt(state.randomMaxDelayMs, DEFAULT_STATE.randomMaxDelayMs);
+  if (state.randomMinDelayMs > 0 && state.randomMaxDelayMs > 0 && state.randomMinDelayMs > state.randomMaxDelayMs) {
+    [state.randomMinDelayMs, state.randomMaxDelayMs] = [state.randomMaxDelayMs, state.randomMinDelayMs];
+  }
+  state.randomDelayCheckIntervalMinutes = normalizeNonNegativeInt(
+    state.randomDelayCheckIntervalMinutes,
+    DEFAULT_STATE.randomDelayCheckIntervalMinutes,
+  );
+  state.randomLastDelayTestAt = parseInt(state.randomLastDelayTestAt || '0', 10) || 0;
+  state.randomLastDelayGroup = safeString(state.randomLastDelayGroup, '');
+  state.randomLastSwitchAt = parseInt(state.randomLastSwitchAt || '0', 10) || 0;
+  state.randomLastSwitchProxy = safeString(state.randomLastSwitchProxy, '');
+  state.delayCache = normalizeDelayCache(state.delayCache);
   state.mixedPort = normalizePort(state.mixedPort, DEFAULT_STATE.mixedPort);
   state.socksPort = normalizePort(state.socksPort, DEFAULT_STATE.socksPort);
   state.httpPort = normalizePort(state.httpPort, DEFAULT_STATE.httpPort);
@@ -220,6 +330,16 @@ function saveState() {
     currentGroup: _state.currentGroup,
     currentProxy: _state.currentProxy,
     lastStoppedAt: _state.lastStoppedAt,
+    randomNodeEnabled: _state.randomNodeEnabled,
+    randomExcludedNodes: _state.randomExcludedNodes,
+    randomMinDelayMs: _state.randomMinDelayMs,
+    randomMaxDelayMs: _state.randomMaxDelayMs,
+    randomDelayCheckIntervalMinutes: _state.randomDelayCheckIntervalMinutes,
+    randomLastDelayTestAt: _state.randomLastDelayTestAt,
+    randomLastDelayGroup: _state.randomLastDelayGroup,
+    randomLastSwitchAt: _state.randomLastSwitchAt,
+    randomLastSwitchProxy: _state.randomLastSwitchProxy,
+    delayCache: normalizeDelayCache(_state.delayCache),
   };
   try {
     writeFileSync(config.clashStateFile, JSON.stringify(payload, null, 2), 'utf8');
@@ -309,9 +429,12 @@ function resolveSelectedGroup(groups) {
 
 function syncCurrentSelection(groups, selectedGroup) {
   const group = groups.find(item => item.name === selectedGroup) || null;
+  const nextGroup = selectedGroup || '';
+  const nextProxy = group?.now || _state.currentProxy || '';
+  const changed = _state.currentGroup !== nextGroup || _state.currentProxy !== nextProxy;
   _state.currentGroup = selectedGroup || '';
   _state.currentProxy = group?.now || _state.currentProxy || '';
-  saveState();
+  if (changed) saveState();
 }
 
 async function getClashGroups() {
@@ -351,6 +474,7 @@ function attachProcessLogs(proc) {
   proc.stderr.on('data', (buf) => appendClashLog(buf.toString('utf8'), 'warn'));
   proc.on('exit', (code, signal) => {
     _ready = false;
+    stopAutoDelayTimer();
     _lastExit = { code, signal, at: Date.now() };
     _state.lastStoppedAt = Date.now();
     if (_proc === proc) _proc = null;
@@ -362,6 +486,7 @@ function attachProcessLogs(proc) {
   });
   proc.on('error', (err) => {
     _ready = false;
+    stopAutoDelayTimer();
     _state.lastError = err.message;
     _lastExit = { code: null, signal: 'spawn_error', at: Date.now() };
     if (_proc === proc) _proc = null;
@@ -384,6 +509,83 @@ async function mapWithConcurrency(items, limit, mapper) {
   });
   await Promise.all(workers);
   return results;
+}
+
+function getRandomTargetGroup(selectedGroup = '') {
+  return safeString(selectedGroup || _state.currentGroup || _state.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME;
+}
+
+function hasRandomDelayFilter() {
+  return normalizeNonNegativeInt(_state.randomMinDelayMs, 0) > 0 || normalizeNonNegativeInt(_state.randomMaxDelayMs, 0) > 0;
+}
+
+function getRandomCandidateNodes(group, delayResults = []) {
+  if (!group || !Array.isArray(group.all)) return [];
+  const excluded = new Set(normalizeStringList(_state.randomExcludedNodes));
+  const delayMap = new Map(normalizeDelayResults(delayResults).map(item => [item.name, item]));
+  const minDelayMs = normalizeNonNegativeInt(_state.randomMinDelayMs, 0);
+  const maxDelayMs = normalizeNonNegativeInt(_state.randomMaxDelayMs, 0);
+  return group.all.filter((nodeName) => {
+    const normalizedNode = safeString(nodeName, '');
+    if (!normalizedNode) return false;
+    const upper = normalizedNode.toUpperCase();
+    if (upper === 'DIRECT' || upper === 'REJECT') return false;
+    if (normalizedNode === DEFAULT_AUTO_GROUP_NAME) return false;
+    if (excluded.has(normalizedNode)) return false;
+    if (!minDelayMs && !maxDelayMs) return true;
+    const delayItem = delayMap.get(normalizedNode);
+    if (!delayItem || delayItem.delay == null) return false;
+    if (minDelayMs && delayItem.delay < minDelayMs) return false;
+    if (maxDelayMs && delayItem.delay > maxDelayMs) return false;
+    return true;
+  });
+}
+
+function pickRandomNode(candidates, currentProxy = '') {
+  if (!Array.isArray(candidates) || candidates.length === 0) return '';
+  const normalizedCurrent = safeString(currentProxy, '');
+  const alternatePool = candidates.length > 1
+    ? candidates.filter(item => item !== normalizedCurrent)
+    : candidates;
+  const pool = alternatePool.length ? alternatePool : candidates;
+  return pool[Math.floor(Math.random() * pool.length)] || '';
+}
+
+function stopAutoDelayTimer() {
+  if (_autoDelayTimer) clearInterval(_autoDelayTimer);
+  _autoDelayTimer = null;
+}
+
+function scheduleAutoDelayTimer() {
+  stopAutoDelayTimer();
+  if (!_state.randomNodeEnabled || !_ready || !isRunning()) return;
+  const intervalMinutes = normalizeNonNegativeInt(_state.randomDelayCheckIntervalMinutes, 0);
+  if (!intervalMinutes) return;
+  _autoDelayTimer = setInterval(() => {
+    refreshRandomDelayCache().catch(err => log.warn(`Clash auto delay test failed: ${err.message}`));
+  }, intervalMinutes * 60 * 1000);
+  _autoDelayTimer.unref?.();
+}
+
+function buildRandomStatus(groups = [], selectedGroup = '') {
+  const groupName = getRandomTargetGroup(selectedGroup);
+  const group = groups.find(item => item.name === groupName) || null;
+  const cacheEntry = getDelayCacheEntry(groupName);
+  const candidates = group ? getRandomCandidateNodes(group, cacheEntry.results) : [];
+  return {
+    enabled: !!_state.randomNodeEnabled,
+    groupName,
+    excludedCount: _state.randomExcludedNodes.length,
+    minDelayMs: _state.randomMinDelayMs,
+    maxDelayMs: _state.randomMaxDelayMs,
+    autoDelayCheckIntervalMinutes: _state.randomDelayCheckIntervalMinutes,
+    lastDelayTestAt: _state.randomLastDelayTestAt,
+    lastDelayGroup: _state.randomLastDelayGroup,
+    lastSwitchAt: _state.randomLastSwitchAt,
+    lastSwitchProxy: _state.randomLastSwitchProxy,
+    cachedResultsCount: cacheEntry.results.length,
+    eligibleCount: candidates.length,
+  };
 }
 
 export function getClashProxy() {
@@ -433,6 +635,15 @@ export function getClashStatus(includeProfileBody = false) {
     currentGroup: _state.currentGroup,
     currentProxy: _state.currentProxy,
     subscriptionConfigured: !!_state.subscriptionUrl,
+    randomNodeEnabled: _state.randomNodeEnabled,
+    randomExcludedNodes: _state.randomExcludedNodes,
+    randomMinDelayMs: _state.randomMinDelayMs,
+    randomMaxDelayMs: _state.randomMaxDelayMs,
+    randomDelayCheckIntervalMinutes: _state.randomDelayCheckIntervalMinutes,
+    randomLastDelayTestAt: _state.randomLastDelayTestAt,
+    randomLastDelayGroup: _state.randomLastDelayGroup,
+    randomLastSwitchAt: _state.randomLastSwitchAt,
+    randomLastSwitchProxy: _state.randomLastSwitchProxy,
     proxy: getClashProxy(),
     effectiveTakeover: !!getClashProxy(),
   };
@@ -448,6 +659,7 @@ export async function getClashDashboardState({ includeProfileBody = false } = {}
     selectedGroup: '',
     groupsCount: 0,
     groupsError: '',
+    randomStatus: buildRandomStatus([], ''),
   };
   if (!state.running || !state.ready) return state;
   const [version, groupPayload] = await Promise.all([
@@ -469,10 +681,12 @@ export async function getClashDashboardState({ includeProfileBody = false } = {}
     state.currentGroup = state.selectedGroup;
     state.currentProxy = currentGroup?.now || state.currentProxy || '';
   }
+  state.randomStatus = buildRandomStatus(state.groups, state.selectedGroup);
   return state;
 }
 
 export function updateClashConfig(patch = {}) {
+  let shouldClearDelayCache = false;
   if (Object.prototype.hasOwnProperty.call(patch, 'enabled')) _state.enabled = parseBool(patch.enabled, _state.enabled);
   if (Object.prototype.hasOwnProperty.call(patch, 'autoStart')) _state.autoStart = parseBool(patch.autoStart, _state.autoStart);
   if (Object.prototype.hasOwnProperty.call(patch, 'takeoverEnabled')) _state.takeoverEnabled = parseBool(patch.takeoverEnabled, _state.takeoverEnabled);
@@ -485,17 +699,44 @@ export function updateClashConfig(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, 'subscriptionUrl') || Object.prototype.hasOwnProperty.call(patch, 'profileUrl')) {
     _state.subscriptionUrl = safeString(patch.subscriptionUrl ?? patch.profileUrl, '');
     _state.profileUrl = _state.subscriptionUrl;
+    shouldClearDelayCache = true;
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'groupName')) _state.groupName = safeString(patch.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME;
-  if (Object.prototype.hasOwnProperty.call(patch, 'testUrl')) _state.testUrl = safeString(patch.testUrl, DEFAULT_TEST_URL) || DEFAULT_TEST_URL;
+  if (Object.prototype.hasOwnProperty.call(patch, 'testUrl')) {
+    _state.testUrl = safeString(patch.testUrl, DEFAULT_TEST_URL) || DEFAULT_TEST_URL;
+    shouldClearDelayCache = true;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, 'updateIntervalMinutes')) {
     _state.updateIntervalMinutes = Math.max(5, normalizePositiveInt(patch.updateIntervalMinutes, _state.updateIntervalMinutes || 60));
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'logLines')) {
     _state.logLines = Math.max(20, normalizePositiveInt(patch.logLines, _state.logLines || DEFAULT_LOG_LINES));
   }
+  if (Object.prototype.hasOwnProperty.call(patch, 'randomNodeEnabled')) {
+    _state.randomNodeEnabled = parseBool(patch.randomNodeEnabled, _state.randomNodeEnabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'randomExcludedNodes')) {
+    _state.randomExcludedNodes = normalizeStringList(patch.randomExcludedNodes);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'randomMinDelayMs')) {
+    _state.randomMinDelayMs = normalizeNonNegativeInt(patch.randomMinDelayMs, _state.randomMinDelayMs);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'randomMaxDelayMs')) {
+    _state.randomMaxDelayMs = normalizeNonNegativeInt(patch.randomMaxDelayMs, _state.randomMaxDelayMs);
+  }
+  if (_state.randomMinDelayMs > 0 && _state.randomMaxDelayMs > 0 && _state.randomMinDelayMs > _state.randomMaxDelayMs) {
+    [_state.randomMinDelayMs, _state.randomMaxDelayMs] = [_state.randomMaxDelayMs, _state.randomMinDelayMs];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'randomDelayCheckIntervalMinutes')) {
+    _state.randomDelayCheckIntervalMinutes = normalizeNonNegativeInt(
+      patch.randomDelayCheckIntervalMinutes,
+      _state.randomDelayCheckIntervalMinutes,
+    );
+  }
+  if (shouldClearDelayCache) clearDelayCache();
   _state.lastError = '';
   saveState();
+  scheduleAutoDelayTimer();
   return getClashStatus(false);
 }
 
@@ -507,6 +748,7 @@ export async function syncClashProfile(patch = null) {
     throw new Error('Clash subscriptionUrl is empty');
   }
   clearProviderCache();
+  clearDelayCache();
   buildRuntimeConfig();
   _state.lastSyncAt = Date.now();
   _state.lastError = '';
@@ -515,7 +757,7 @@ export async function syncClashProfile(patch = null) {
   return getClashDashboardState();
 }
 
-export async function selectClashProxy(groupName, proxyName) {
+async function setClashGroupProxy(groupName, proxyName, { save = true } = {}) {
   const targetGroup = safeString(groupName, '');
   const targetProxy = safeString(proxyName, '');
   if (!targetGroup) throw new Error('groupName is required');
@@ -529,42 +771,168 @@ export async function selectClashProxy(groupName, proxyName) {
     });
     _state.currentProxy = targetProxy;
   }
-  saveState();
+  if (save) saveState();
+}
+
+export async function selectClashProxy(groupName, proxyName) {
+  await setClashGroupProxy(groupName, proxyName);
   return getClashDashboardState();
 }
 
-export async function testClashGroupDelays(groupName = '') {
+async function runDelayTestForGroup(groupName = '') {
   const groupPayload = await getClashGroups();
   if (!groupPayload.running) {
     return {
       running: false,
       groupName: safeString(groupName || groupPayload.selectedGroup, ''),
       testUrl: _state.testUrl,
+      testedAt: 0,
       results: [],
     };
   }
   const targetGroupName = safeString(groupName || groupPayload.selectedGroup, '');
-  const targetGroup = groupPayload.groups.find(group => group.name === targetGroupName);
-  if (!targetGroup) throw new Error('指定策略组不存在');
-  const candidates = targetGroup.all.filter(name => !['DIRECT', 'REJECT'].includes(String(name).toUpperCase()));
-  const results = await mapWithConcurrency(candidates, 8, async (nodeName) => {
-    try {
-      const payload = await controllerRequest(`/proxies/${encodeURIComponent(nodeName)}/delay?timeout=3000&url=${encodeURIComponent(_state.testUrl)}`, {
-        timeout: 5000,
-      });
-      const delay = Number.isFinite(payload?.delay) ? payload.delay : null;
-      return { name: nodeName, delay, error: '' };
-    } catch (err) {
-      return { name: nodeName, delay: null, error: err.message };
-    }
+  const inflight = _delayRefreshPromises.get(targetGroupName);
+  if (inflight) return inflight;
+  const promise = (async () => {
+    const targetGroup = groupPayload.groups.find(group => group.name === targetGroupName);
+    if (!targetGroup) throw new Error('指定策略组不存在');
+    const candidates = targetGroup.all.filter(name => !['DIRECT', 'REJECT'].includes(String(name).toUpperCase()) && String(name) !== DEFAULT_AUTO_GROUP_NAME);
+    const results = await mapWithConcurrency(candidates, 8, async (nodeName) => {
+      try {
+        const payload = await controllerRequest(`/proxies/${encodeURIComponent(nodeName)}/delay?timeout=3000&url=${encodeURIComponent(_state.testUrl)}`, {
+          timeout: 5000,
+        });
+        const delay = Number.isFinite(payload?.delay) ? payload.delay : null;
+        return { name: nodeName, delay, error: '' };
+      } catch (err) {
+        return { name: nodeName, delay: null, error: err.message };
+      }
+    });
+    results.sort((a, b) => (a.delay == null ? 1 : 0) - (b.delay == null ? 1 : 0) || ((a.delay ?? 999999) - (b.delay ?? 999999)));
+    const testedAt = Date.now();
+    setDelayCacheEntry(targetGroupName, { testedAt, testUrl: _state.testUrl, results });
+    return {
+      running: true,
+      groupName: targetGroupName,
+      testUrl: _state.testUrl,
+      testedAt,
+      results,
+    };
+  })();
+  _delayRefreshPromises.set(targetGroupName, promise);
+  promise.finally(() => {
+    _delayRefreshPromises.delete(targetGroupName);
   });
-  results.sort((a, b) => (a.delay == null ? 1 : 0) - (b.delay == null ? 1 : 0) || ((a.delay ?? 999999) - (b.delay ?? 999999)));
+  return promise;
+}
+
+async function refreshRandomDelayCache() {
+  if (!_state.randomNodeEnabled || !_ready || !isRunning()) return null;
+  const targetGroupName = getRandomTargetGroup();
+  if (!targetGroupName) return null;
+  const cacheEntry = getDelayCacheEntry(targetGroupName);
+  const intervalMinutes = normalizeNonNegativeInt(_state.randomDelayCheckIntervalMinutes, 0);
+  const isFresh = intervalMinutes > 0
+    && cacheEntry.testedAt
+    && (Date.now() - cacheEntry.testedAt) < intervalMinutes * 60 * 1000;
+  if (isFresh) {
+    return {
+      running: true,
+      groupName: targetGroupName,
+      testUrl: cacheEntry.testUrl || _state.testUrl,
+      testedAt: cacheEntry.testedAt,
+      results: cacheEntry.results,
+    };
+  }
+  return runDelayTestForGroup(targetGroupName);
+}
+
+async function ensureRandomDelayCache(groupName) {
+  const targetGroupName = getRandomTargetGroup(groupName);
+  const cacheEntry = getDelayCacheEntry(targetGroupName);
+  const intervalMinutes = normalizeNonNegativeInt(_state.randomDelayCheckIntervalMinutes, 0);
+  const isFresh = cacheEntry.testedAt && (
+    intervalMinutes <= 0 || (Date.now() - cacheEntry.testedAt) < intervalMinutes * 60 * 1000
+  );
+  if (!hasRandomDelayFilter()) {
+    if (intervalMinutes > 0 && !isFresh) {
+      refreshRandomDelayCache().catch(err => log.warn(`Clash random delay refresh failed: ${err.message}`));
+    }
+    return cacheEntry;
+  }
+  if (cacheEntry.results.length && isFresh) return cacheEntry;
+  const refreshed = await runDelayTestForGroup(targetGroupName);
   return {
-    running: true,
-    groupName: targetGroupName,
-    testUrl: _state.testUrl,
-    results,
+    testedAt: refreshed.testedAt || 0,
+    testUrl: refreshed.testUrl || _state.testUrl,
+    results: refreshed.results || [],
   };
+}
+
+async function maybeRandomizeClashNode(meta = {}) {
+  if (!_state.randomNodeEnabled || !_ready || !isRunning()) {
+    return { switched: false, proxy: _state.currentProxy || '', groupName: getRandomTargetGroup() };
+  }
+  if (_randomSwitchPromise) return _randomSwitchPromise;
+  _randomSwitchPromise = (async () => {
+    const groupPayload = await getClashGroups();
+    if (!groupPayload.running) {
+      return { switched: false, proxy: _state.currentProxy || '', groupName: getRandomTargetGroup(groupPayload.selectedGroup) };
+    }
+    const targetGroupName = getRandomTargetGroup(groupPayload.selectedGroup);
+    const targetGroup = groupPayload.groups.find(group => group.name === targetGroupName) || null;
+    if (!targetGroup) {
+      return { switched: false, proxy: _state.currentProxy || '', groupName: targetGroupName };
+    }
+    const cacheEntry = await ensureRandomDelayCache(targetGroupName);
+    const candidates = getRandomCandidateNodes(targetGroup, cacheEntry.results);
+    if (!candidates.length) {
+      log.warn(`Clash random selection skipped: no eligible nodes for ${targetGroupName}`);
+      return { switched: false, proxy: targetGroup.now || _state.currentProxy || '', groupName: targetGroupName, candidates: 0 };
+    }
+    const nextProxy = pickRandomNode(candidates, targetGroup.now || _state.currentProxy || '');
+    if (!nextProxy) {
+      return { switched: false, proxy: targetGroup.now || _state.currentProxy || '', groupName: targetGroupName, candidates: candidates.length };
+    }
+    const switched = nextProxy !== targetGroup.now;
+    if (switched) {
+      await setClashGroupProxy(targetGroupName, nextProxy, { save: false });
+    } else {
+      _state.groupName = targetGroupName;
+      _state.currentGroup = targetGroupName;
+      _state.currentProxy = nextProxy;
+    }
+    _state.randomLastSwitchAt = Date.now();
+    _state.randomLastSwitchProxy = nextProxy;
+    _state.lastError = '';
+    saveState();
+    if (meta?.reason) {
+      log.debug(`Clash random node selected: ${nextProxy} group=${targetGroupName} reason=${meta.reason}`);
+    }
+    return { switched, proxy: nextProxy, groupName: targetGroupName, candidates: candidates.length };
+  })().catch((err) => {
+    _state.lastError = err.message;
+    saveState();
+    throw err;
+  }).finally(() => {
+    _randomSwitchPromise = null;
+  });
+  return _randomSwitchPromise;
+}
+
+export async function testClashGroupDelays(groupName = '') {
+  return runDelayTestForGroup(groupName);
+}
+
+export async function prepareClashForRequest(meta = {}) {
+  const proxy = getClashProxy();
+  if (!proxy) return null;
+  try {
+    await maybeRandomizeClashNode(meta);
+  } catch (err) {
+    log.warn(`Clash random selection failed: ${err.message}`);
+  }
+  return getClashProxy();
 }
 
 export function getClashLogs(limit = _state.logLines) {
@@ -598,10 +966,15 @@ export async function startClash() {
     _state.lastError = '';
     saveState();
     await getClashGroups().catch(() => null);
+    scheduleAutoDelayTimer();
+    if (_state.randomNodeEnabled && normalizeNonNegativeInt(_state.randomDelayCheckIntervalMinutes, 0) > 0) {
+      refreshRandomDelayCache().catch(err => log.warn(`Clash initial auto delay test failed: ${err.message}`));
+    }
     log.info(`Clash ready on mixed-port ${_state.mixedPort}`);
     return getClashStatus();
   })().catch((err) => {
     _ready = false;
+    stopAutoDelayTimer();
     _state.lastError = err.message;
     saveState();
     throw err;
@@ -613,6 +986,7 @@ export async function startClash() {
 
 export async function stopClash() {
   _ready = false;
+  stopAutoDelayTimer();
   const proc = _proc;
   if (!proc || proc.exitCode != null) {
     _proc = null;

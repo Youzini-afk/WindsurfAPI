@@ -11,7 +11,7 @@
 import { randomUUID } from 'crypto';
 import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'fs';
 import { config, log } from './config.js';
-import { getEffectiveProxy } from './dashboard/proxy-config.js';
+import { getEffectiveProxy, prepareEffectiveProxy } from './dashboard/proxy-config.js';
 import { getTierModels, getModelKeysByEnum, MODELS } from './models.js';
 
 const ACCOUNTS_FILE = config.accountsFile;
@@ -140,7 +140,7 @@ async function fetchAndMergeModelCatalog() {
   try {
     const { getCascadeModelConfigs } = await import('./windsurf-api.js');
     const { mergeCloudModels } = await import('./models.js');
-    const proxy = getEffectiveProxy(acct.id) || null;
+    const proxy = await prepareEffectiveProxy(acct.id, { reason: 'model_catalog' }) || null;
     const { configs } = await getCascadeModelConfigs(acct.apiKey, proxy);
     const added = mergeCloudModels(configs);
     log.info(`Model catalog: ${configs.length} cloud models, ${added} new entries merged`);
@@ -152,7 +152,8 @@ async function fetchAndMergeModelCatalog() {
 async function registerWithCodeium(idToken) {
   const { WindsurfClient } = await import('./client.js');
   const client = new WindsurfClient('', 0, '');
-  const result = await client.registerUser(idToken, getEffectiveProxy() || null);
+  const proxy = await prepareEffectiveProxy(null, { reason: 'register_user' }) || null;
+  const result = await client.registerUser(idToken, proxy);
   return result; // { apiKey, name, apiServerUrl }
 }
 
@@ -449,7 +450,7 @@ export function getRpmStats() {
 export async function ensureLsForAccount(accountId) {
   const { ensureLs } = await import('./langserver.js');
   const account = accounts.find(a => a.id === accountId);
-  const proxy = getEffectiveProxy(accountId) || null;
+  const proxy = await prepareEffectiveProxy(accountId, { reason: 'ensure_ls' }) || null;
   try {
     const ls = await ensureLs(proxy);
     // Pre-warm the Cascade workspace init so the first real request on this
@@ -621,7 +622,7 @@ export async function refreshCredits(id) {
   if (!account) return { ok: false, error: 'Account not found' };
   try {
     const { getUserStatus } = await import('./windsurf-api.js');
-    const proxy = getEffectiveProxy(account.id) || null;
+    const proxy = await prepareEffectiveProxy(account.id, { reason: 'refresh_credits' }) || null;
     const status = await getUserStatus(account.apiKey, proxy);
     // Drop the huge raw payload before persisting — keep it only in memory for
     // downstream callers (e.g. model catalog cache) to inspect once.
@@ -707,7 +708,7 @@ export async function fetchUserStatus(id) {
 
   const { WindsurfClient } = await import('./client.js');
   const { ensureLs, getLsFor } = await import('./langserver.js');
-  const proxy = getEffectiveProxy(account.id) || null;
+  const proxy = await prepareEffectiveProxy(account.id, { reason: 'fetch_user_status' }) || null;
   await ensureLs(proxy);
   const ls = getLsFor(proxy);
   if (!ls) { log.warn(`No LS for GetUserStatus on ${account.id}`); return null; }
@@ -809,7 +810,7 @@ export async function probeAccount(id) {
   const { getModelInfo } = await import('./models.js');
   const { ensureLs, getLsFor } = await import('./langserver.js');
 
-  const proxy = getEffectiveProxy(account.id) || null;
+  const proxy = await prepareEffectiveProxy(account.id, { reason: 'probe_account' }) || null;
   await ensureLs(proxy);
   const ls = getLsFor(proxy);
   if (!ls) { log.error(`No LS available for account ${account.id}`); return null; }
@@ -895,7 +896,7 @@ async function refreshAllFirebaseTokens() {
   for (const a of accounts) {
     if (a.status !== 'active' || !a.refreshToken) continue;
     try {
-      const proxy = getEffectiveProxy(a.id) || null;
+      const proxy = await prepareEffectiveProxy(a.id, { reason: 'refresh_firebase_token' }) || null;
       const { idToken, refreshToken: newRefresh } = await refreshFirebaseToken(a.refreshToken, proxy);
       a.refreshToken = newRefresh;
       // Re-register to get a fresh API key (may be the same key)

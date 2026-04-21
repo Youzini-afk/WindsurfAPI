@@ -1472,6 +1472,48 @@ window._firebaseOAuth = async function(provider) {
     <div class="section">
       <div class="section-header">
         <div>
+          <div class="section-title">随机节点调度</div>
+          <div class="section-desc">向外请求前随机切换当前策略组节点，可排除固定节点，并按延迟区间筛选候选。</div>
+        </div>
+      </div>
+      <div class="section-body">
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          <label class="checkbox">
+            <input type="checkbox" id="clash-random-node-enabled">
+            <span class="box"></span>
+            <span>向外请求前随机切换节点</span>
+          </label>
+        </div>
+        <div class="field-row mt-3">
+          <div class="field" style="max-width:180px">
+            <label class="field-label">最低延迟（ms）</label>
+            <input id="clash-random-min-delay" class="input" type="number" placeholder="0">
+          </div>
+          <div class="field" style="max-width:180px">
+            <label class="field-label">最高延迟（ms）</label>
+            <input id="clash-random-max-delay" class="input" type="number" placeholder="0">
+          </div>
+          <div class="field" style="max-width:220px">
+            <label class="field-label">自动测速间隔（分钟）</label>
+            <input id="clash-random-delay-interval" class="input" type="number" placeholder="10">
+          </div>
+        </div>
+        <div class="field-row mt-3">
+          <div class="field" style="flex:2">
+            <label class="field-label">不参与随机的节点</label>
+            <textarea id="clash-random-excluded-nodes" class="input" style="min-height:120px" placeholder="每行一个节点名，或使用逗号分隔"></textarea>
+          </div>
+        </div>
+        <div class="field-row-actions">
+          <button class="btn btn-primary" onclick="App.saveClashRandomConfig()">保存随机策略</button>
+        </div>
+        <div id="clash-random-summary" class="text-sm text-muted" style="margin-top:10px">未启用随机节点</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <div>
           <div class="section-title">策略组与节点</div>
           <div class="section-desc">先选策略组，再直接点击节点按钮切换。测速结果和当前节点会围绕所选策略组展示。</div>
         </div>
@@ -2989,9 +3031,27 @@ const App = {
     document.getElementById('clash-group-name').value = d.groupName || '节点选择';
     document.getElementById('clash-test-url').value = d.testUrl || 'https://www.gstatic.com/generate_204';
     document.getElementById('clash-secret').value = d.secret || '';
+    document.getElementById('clash-random-node-enabled').checked = !!d.randomNodeEnabled;
+    document.getElementById('clash-random-min-delay').value = d.randomMinDelayMs || 0;
+    document.getElementById('clash-random-max-delay').value = d.randomMaxDelayMs || 0;
+    document.getElementById('clash-random-delay-interval').value = d.randomDelayCheckIntervalMinutes ?? 10;
+    document.getElementById('clash-random-excluded-nodes').value = Array.isArray(d.randomExcludedNodes) ? d.randomExcludedNodes.join('\n') : '';
     this.renderClashStatus();
     this.renderClashGroups();
     this.renderClashDelayResults();
+  },
+
+  collectClashRandomForm() {
+    return {
+      randomNodeEnabled: document.getElementById('clash-random-node-enabled').checked,
+      randomMinDelayMs: parseInt(document.getElementById('clash-random-min-delay').value, 10) || 0,
+      randomMaxDelayMs: parseInt(document.getElementById('clash-random-max-delay').value, 10) || 0,
+      randomDelayCheckIntervalMinutes: parseInt(document.getElementById('clash-random-delay-interval').value, 10) || 0,
+      randomExcludedNodes: document.getElementById('clash-random-excluded-nodes').value
+        .split(/[\r\n,，;；]+/)
+        .map(item => item.trim())
+        .filter(Boolean),
+    };
   },
 
   collectClashForm() {
@@ -3008,6 +3068,7 @@ const App = {
       updateIntervalMinutes: parseInt(document.getElementById('clash-update-interval').value, 10) || 60,
       logLines: parseInt(document.getElementById('clash-log-lines').value, 10) || 200,
       secret: document.getElementById('clash-secret').value.trim(),
+      ...this.collectClashRandomForm(),
     };
   },
 
@@ -3035,6 +3096,43 @@ const App = {
     const lastErrorEl = document.getElementById('clash-last-error');
     lastErrorEl.textContent = d.lastError || '无';
     lastErrorEl.style.color = d.lastError ? 'var(--error)' : 'var(--muted)';
+    this.renderClashRandomStatus();
+  },
+
+  renderClashRandomStatus() {
+    const d = this.clashData || {};
+    const randomStatus = d.randomStatus || {};
+    const summaryEl = document.getElementById('clash-random-summary');
+    if (!summaryEl) return;
+    if (!d.randomNodeEnabled) {
+      summaryEl.textContent = '未启用随机节点';
+      return;
+    }
+    const parts = [
+      '已启用随机节点',
+      `策略组：${randomStatus.groupName || d.currentGroup || d.groupName || '-'}`,
+      `候选 ${randomStatus.eligibleCount || 0} 个`,
+      `排除 ${randomStatus.excludedCount || 0} 个`,
+    ];
+    if ((d.randomMinDelayMs || 0) > 0 || (d.randomMaxDelayMs || 0) > 0) {
+      const minDelayText = (d.randomMinDelayMs || 0) > 0 ? String(d.randomMinDelayMs) : '0';
+      const maxDelayText = (d.randomMaxDelayMs || 0) > 0 ? String(d.randomMaxDelayMs) : '∞';
+      parts.push(`延迟范围 ${minDelayText} - ${maxDelayText} ms`);
+      if ((randomStatus.cachedResultsCount || 0) === 0) {
+        parts.push('暂无测速缓存，首次请求会先测速');
+      }
+    }
+    if ((d.randomDelayCheckIntervalMinutes || 0) > 0) {
+      parts.push(`自动测速 ${d.randomDelayCheckIntervalMinutes} 分钟`);
+    }
+    if (d.randomLastDelayTestAt) {
+      parts.push(`上次测速 ${new Date(d.randomLastDelayTestAt).toLocaleString()}`);
+    }
+    if (d.randomLastSwitchProxy) {
+      const switchTime = d.randomLastSwitchAt ? ` @ ${new Date(d.randomLastSwitchAt).toLocaleString()}` : '';
+      parts.push(`最近切换 ${d.randomLastSwitchProxy}${switchTime}`);
+    }
+    summaryEl.textContent = parts.join(' · ');
   },
 
   renderClashGroups() {
@@ -3183,6 +3281,17 @@ const App = {
     if (r.error) return this.toast(r.error, 'error');
     this.toast('Clash 已重启');
     await this.loadClash();
+  },
+
+  async saveClashRandomConfig() {
+    const r = await this.api('PUT', '/clash/random-config', this.collectClashRandomForm());
+    if (r.error) return this.toast(r.error, 'error');
+    this.toast('随机策略已保存');
+    if (r.clash) {
+      this.applyClashData(r.clash);
+    } else {
+      await this.loadClash();
+    }
   },
 
   async runClashDelayTest() {

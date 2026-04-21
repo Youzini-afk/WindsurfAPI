@@ -5,7 +5,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { config, log } from '../config.js';
-import { getClashProxy } from '../clash.js';
+import { getClashProxy, prepareClashForRequest } from '../clash.js';
 
 const PROXY_FILE = config.proxyConfigFile;
 
@@ -99,14 +99,22 @@ export function removeProxy(scope, accountId) {
   save();
 }
 
-/**
- * Get effective proxy for an account (per-account takes priority over global).
- */
 export function getEffectiveProxy(accountId) {
   if (accountId && _config.perAccount[accountId]) {
     return _config.perAccount[accountId];
   }
   const clashProxy = getClashProxy();
   if (clashProxy) return clashProxy;
+  return _config.global;
+}
+
+export async function prepareEffectiveProxy(accountId, options = {}) {
+  if (accountId && _config.perAccount[accountId]) {
+    return _config.perAccount[accountId];
+  }
+  const clashProxy = getClashProxy();
+  if (clashProxy) {
+    return prepareClashForRequest({ accountId, ...options });
+  }
   return _config.global;
 }
