@@ -15,7 +15,7 @@ import { cacheKey, cacheGet, cacheSet } from '../cache.js';
 import { isExperimentalEnabled, getIdentityPromptFor } from '../runtime-config.js';
 import { checkMessageRateLimit } from '../windsurf-api.js';
 import { acquireClashStreamGuard, releaseClashStreamGuard } from '../clash.js';
-import { prepareEffectiveProxy } from '../dashboard/proxy-config.js';
+import { prepareEffectiveProxyLeased } from '../dashboard/proxy-config.js';
 import {
   fingerprintBefore, fingerprintAfter, checkout as poolCheckout, checkin as poolCheckin,
 } from '../conversation-pool.js';
@@ -287,60 +287,65 @@ export async function handleChatCompletions(body) {
       if (!acct) break;
     }
     tried.push(acct.apiKey);
-    acct.proxy = await prepareEffectiveProxy(acct.id, { reason: 'chat_attempt', modelKey }) || null;
+    const leasedProxy = await prepareEffectiveProxyLeased(acct.id, { reason: 'chat_attempt', modelKey, mode: 'slot' });
+    acct.proxy = leasedProxy.proxy || null;
 
     // Pre-flight rate limit check (experimental): ask server.codeium.com if
     // this account still has message capacity before burning an LS round trip.
-    if (isExperimentalEnabled('preflightRateLimit')) {
-      try {
-        const rl = await checkMessageRateLimit(acct.apiKey, acct.proxy || null);
-        if (!rl.hasCapacity) {
-          log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
-          markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);
-          continue;
+    try {
+      if (isExperimentalEnabled('preflightRateLimit')) {
+        try {
+          const rl = await checkMessageRateLimit(acct.apiKey, acct.proxy || null);
+          if (!rl.hasCapacity) {
+            log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
+            markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);
+            continue;
+          }
+        } catch (e) {
+          log.debug(`Preflight check failed for ${acct.email}: ${e.message}`);
+          // Fail open — proceed with the request
         }
-      } catch (e) {
-        log.debug(`Preflight check failed for ${acct.email}: ${e.message}`);
-        // Fail open — proceed with the request
       }
-    }
 
-    await ensureLs(acct.proxy);
-    const ls = getLsFor(acct.proxy);
-    if (!ls) { lastErr = { status: 503, body: { error: { message: 'No LS instance available', type: 'ls_unavailable' } } }; break; }
-    // Cascade pins cascade_id to a specific LS port too; if the LS it was
-    // born on has been replaced, the cascade_id is dead.
-    if (reuseEntry && reuseEntry.lsPort !== ls.port) {
-      log.info('Chat: cascade reuse skipped — LS port changed');
-      reuseEntry = null;
+      await ensureLs(acct.proxy);
+      const ls = getLsFor(acct.proxy);
+      if (!ls) { lastErr = { status: 503, body: { error: { message: 'No LS instance available', type: 'ls_unavailable' } } }; break; }
+      // Cascade pins cascade_id to a specific LS port too; if the LS it was
+      // born on has been replaced, the cascade_id is dead.
+      if (reuseEntry && reuseEntry.lsPort !== ls.port) {
+        log.info('Chat: cascade reuse skipped — LS port changed');
+        reuseEntry = null;
+      }
+      const _msgChars = (messages || []).reduce((n, m) => {
+        const c = m?.content;
+        return n + (typeof c === 'string' ? c.length : Array.isArray(c) ? c.reduce((k, p) => k + (typeof p?.text === 'string' ? p.text.length : 0), 0) : 0);
+      }, 0);
+      log.info(`Chat: model=${displayModel} flow=${useCascade ? 'cascade' : 'legacy'} attempt=${attempt + 1} account=${acct.email} ls=${ls.port} turns=${(messages||[]).length} chars=${_msgChars}${reuseEntry ? ' reuse=1' : ''}${emulateTools ? ' tools=emu' : ''}`);
+      const client = new WindsurfClient(acct.apiKey, ls.port, ls.csrfToken);
+      const result = await nonStreamResponse(
+        client, chatId, created, displayModel, modelKey, messages, cascadeMessages, modelEnum, modelUid,
+        useCascade, acct.apiKey, ckey,
+        reuseEnabled ? { reuseEntry, lsPort: ls.port, apiKey: acct.apiKey } : null,
+        emulateTools, toolPreamble,
+      );
+      if (result.status === 200) return result;
+      reuseEntry = null; // don't try to reuse on the retry
+      lastErr = result;
+      const errType = result.body?.error?.type;
+      // Rate limit: this account is done for this model, try the next one
+      if (errType === 'rate_limit_exceeded') {
+        log.warn(`Account ${acct.email} rate-limited on ${displayModel}, trying next account`);
+        continue;
+      }
+      // Model not available on this account (permission_denied, etc.)
+      if (errType === 'model_not_available') {
+        log.warn(`Account ${acct.email} cannot serve ${displayModel}, trying next account`);
+        continue;
+      }
+      break; // other errors (502, transport) — don't retry
+    } finally {
+      leasedProxy.release?.();
     }
-    const _msgChars = (messages || []).reduce((n, m) => {
-      const c = m?.content;
-      return n + (typeof c === 'string' ? c.length : Array.isArray(c) ? c.reduce((k, p) => k + (typeof p?.text === 'string' ? p.text.length : 0), 0) : 0);
-    }, 0);
-    log.info(`Chat: model=${displayModel} flow=${useCascade ? 'cascade' : 'legacy'} attempt=${attempt + 1} account=${acct.email} ls=${ls.port} turns=${(messages||[]).length} chars=${_msgChars}${reuseEntry ? ' reuse=1' : ''}${emulateTools ? ' tools=emu' : ''}`);
-    const client = new WindsurfClient(acct.apiKey, ls.port, ls.csrfToken);
-    const result = await nonStreamResponse(
-      client, chatId, created, displayModel, modelKey, messages, cascadeMessages, modelEnum, modelUid,
-      useCascade, acct.apiKey, ckey,
-      reuseEnabled ? { reuseEntry, lsPort: ls.port, apiKey: acct.apiKey } : null,
-      emulateTools, toolPreamble,
-    );
-    if (result.status === 200) return result;
-    reuseEntry = null; // don't try to reuse on the retry
-    lastErr = result;
-    const errType = result.body?.error?.type;
-    // Rate limit: this account is done for this model, try the next one
-    if (errType === 'rate_limit_exceeded') {
-      log.warn(`Account ${acct.email} rate-limited on ${displayModel}, trying next account`);
-      continue;
-    }
-    // Model not available on this account (permission_denied, etc.)
-    if (errType === 'model_not_available') {
-      log.warn(`Account ${acct.email} cannot serve ${displayModel}, trying next account`);
-      continue;
-    }
-    break; // other errors (502, transport) — don't retry
   }
   // If all accounts exhausted, check if it's because they're all rate-limited
   if (!lastErr || lastErr.status === 429) {
@@ -698,7 +703,8 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
           }
           tried.push(acct.apiKey);
           currentApiKey = acct.apiKey;
-          acct.proxy = await prepareEffectiveProxy(acct.id, { reason: 'chat_stream_attempt', modelKey }) || null;
+          const leasedProxy = await prepareEffectiveProxyLeased(acct.id, { reason: 'chat_stream_attempt', modelKey, mode: 'slot' });
+          acct.proxy = leasedProxy.proxy || null;
           let clashStreamGuardToken = '';
 
           try {
@@ -820,6 +826,7 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
             if (clashStreamGuardToken) {
               releaseClashStreamGuard(clashStreamGuardToken);
             }
+            leasedProxy.release?.();
           }
         }
 

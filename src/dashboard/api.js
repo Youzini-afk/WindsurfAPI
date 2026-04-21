@@ -482,7 +482,12 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
 
   if (subpath === '/clash/random-config' && method === 'PUT') {
     try {
+      const before = getClashStatus();
       updateClashConfig(body || {});
+      const after = getClashStatus();
+      if (before.running && (before.randomSlotCount || 0) !== (after.randomSlotCount || 0)) {
+        await restartClash();
+      }
       const clash = await getClashDashboardState();
       return json(res, 200, { success: true, clash });
     } catch (err) {

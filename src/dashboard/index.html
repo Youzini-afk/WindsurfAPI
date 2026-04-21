@@ -1497,6 +1497,10 @@ window._firebaseOAuth = async function(provider) {
             <label class="field-label">自动测速间隔（分钟）</label>
             <input id="clash-random-delay-interval" class="input" type="number" placeholder="10">
           </div>
+          <div class="field" style="max-width:220px">
+            <label class="field-label">独立槽位数量</label>
+            <input id="clash-random-slot-count" class="input" type="number" min="0" max="64" placeholder="10">
+          </div>
         </div>
         <div class="field-row mt-3">
           <div class="field" style="flex:2">
@@ -3035,6 +3039,7 @@ const App = {
     document.getElementById('clash-random-min-delay').value = d.randomMinDelayMs || 0;
     document.getElementById('clash-random-max-delay').value = d.randomMaxDelayMs || 0;
     document.getElementById('clash-random-delay-interval').value = d.randomDelayCheckIntervalMinutes ?? 10;
+    document.getElementById('clash-random-slot-count').value = d.randomSlotCount ?? 10;
     document.getElementById('clash-random-excluded-nodes').value = Array.isArray(d.randomExcludedNodes) ? d.randomExcludedNodes.join('\n') : '';
     this.renderClashStatus();
     this.renderClashGroups();
@@ -3047,6 +3052,7 @@ const App = {
       randomMinDelayMs: parseInt(document.getElementById('clash-random-min-delay').value, 10) || 0,
       randomMaxDelayMs: parseInt(document.getElementById('clash-random-max-delay').value, 10) || 0,
       randomDelayCheckIntervalMinutes: parseInt(document.getElementById('clash-random-delay-interval').value, 10) || 0,
+      randomSlotCount: parseInt(document.getElementById('clash-random-slot-count').value, 10) || 0,
       randomExcludedNodes: document.getElementById('clash-random-excluded-nodes').value
         .split(/[\r\n,，;；]+/)
         .map(item => item.trim())
@@ -3125,6 +3131,8 @@ const App = {
     if ((d.randomDelayCheckIntervalMinutes || 0) > 0) {
       parts.push(`自动测速 ${d.randomDelayCheckIntervalMinutes} 分钟`);
     }
+    parts.push(`槽位 ${randomStatus.activeSlotCount || d.activeSlotCount || 0}/${randomStatus.slotCount || d.randomSlotCount || 0}`);
+    parts.push('无空槽位时回退全局切换');
     if ((randomStatus.activeStreamCount || d.activeStreamCount || 0) > 0) {
       parts.push(`流式保护中 ${randomStatus.activeStreamCount || d.activeStreamCount || 0} 个请求`);
     }

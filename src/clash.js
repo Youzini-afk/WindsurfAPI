@@ -11,6 +11,11 @@ const DEFAULT_LOG_LINES = 200;
 const GROUP_PROXY_TYPES = ['selector', 'urltest', 'fallback', 'loadbalance', 'relay'];
 const CLASH_LOG_FILE = resolvePath(config.clashDir, 'mihomo.log');
 const DEFAULT_RANDOM_DELAY_CHECK_INTERVAL_MINUTES = 10;
+const DEFAULT_RANDOM_SLOT_COUNT = 10;
+const MAX_RANDOM_SLOT_COUNT = 64;
+const SLOT_PORT_OFFSET = 1000;
+const INTERNAL_SLOT_GROUP_PREFIX = '__RANDOM_SLOT_';
+const INTERNAL_SLOT_LISTENER_PREFIX = 'random-slot-';
 
 const DEFAULT_STATE = {
   enabled: config.clashEnabled,
@@ -41,6 +46,7 @@ const DEFAULT_STATE = {
   randomLastDelayGroup: '',
   randomLastSwitchAt: 0,
   randomLastSwitchProxy: '',
+  randomSlotCount: DEFAULT_RANDOM_SLOT_COUNT,
   delayCache: {},
 };
 
@@ -53,6 +59,186 @@ let _randomSwitchPromise = null;
 const _delayRefreshPromises = new Map();
 let _autoDelayTimer = null;
 const _activeStreamLocks = new Map();
+const _slotStates = new Map();
+const _slotLeases = new Map();
+let _slotReservationLock = Promise.resolve();
+
+function normalizeSlotCount(value, fallback = DEFAULT_RANDOM_SLOT_COUNT) {
+  return Math.max(0, Math.min(MAX_RANDOM_SLOT_COUNT, normalizeNonNegativeInt(value, fallback)));
+}
+
+function getRandomSlotCount() {
+  return normalizeSlotCount(_state.randomSlotCount, DEFAULT_STATE.randomSlotCount);
+}
+
+function getSlotListenerBasePort() {
+  const preferred = normalizeNonNegativeInt(_state.mixedPort, DEFAULT_STATE.mixedPort) + SLOT_PORT_OFFSET;
+  return Math.max(1025, Math.min(65535 - MAX_RANDOM_SLOT_COUNT, preferred));
+}
+
+function getSlotGroupName(slotId) {
+  return `${INTERNAL_SLOT_GROUP_PREFIX}${String(slotId).padStart(2, '0')}`;
+}
+
+function getSlotListenerName(slotId) {
+  return `${INTERNAL_SLOT_LISTENER_PREFIX}${String(slotId).padStart(2, '0')}`;
+}
+
+function getSlotListenerPort(slotId) {
+  return getSlotListenerBasePort() + Math.max(0, slotId - 1);
+}
+
+function isInternalSlotGroupName(name = '') {
+  return safeString(name, '').startsWith(INTERNAL_SLOT_GROUP_PREFIX);
+}
+
+function syncSlotRuntimePool() {
+  const slotCount = getRandomSlotCount();
+  for (let slotId = 1; slotId <= slotCount; slotId += 1) {
+    const existing = _slotStates.get(slotId);
+    if (existing) {
+      existing.groupName = getSlotGroupName(slotId);
+      existing.listenerName = getSlotListenerName(slotId);
+      existing.port = getSlotListenerPort(slotId);
+      continue;
+    }
+    _slotStates.set(slotId, {
+      slotId,
+      groupName: getSlotGroupName(slotId),
+      listenerName: getSlotListenerName(slotId),
+      port: getSlotListenerPort(slotId),
+      leaseToken: '',
+      leaseStartedAt: 0,
+      lastUsedAt: 0,
+      currentProxy: '',
+      accountId: '',
+      modelKey: '',
+      reason: '',
+    });
+  }
+  for (const slotId of Array.from(_slotStates.keys())) {
+    if (slotId <= slotCount) continue;
+    const slot = _slotStates.get(slotId);
+    if (slot?.leaseToken) {
+      _slotLeases.delete(slot.leaseToken);
+    }
+    _slotStates.delete(slotId);
+  }
+}
+
+function getActiveSlotLeaseCount() {
+  syncSlotRuntimePool();
+  let count = 0;
+  for (const slot of _slotStates.values()) {
+    if (slot.leaseToken) count += 1;
+  }
+  return count;
+}
+
+function buildClashSlotProxy(slotId, currentProxy = '') {
+  return {
+    type: 'http',
+    host: '127.0.0.1',
+    port: getSlotListenerPort(slotId),
+    username: '',
+    password: '',
+    source: 'clash_slot',
+    slotId,
+    currentProxy: safeString(currentProxy, ''),
+  };
+}
+
+function buildSlotStatusList(groups = []) {
+  syncSlotRuntimePool();
+  const groupMap = new Map((groups || []).map(group => [group.name, group]));
+  return Array.from(_slotStates.values())
+    .sort((a, b) => a.slotId - b.slotId)
+    .map((slot) => {
+      const group = groupMap.get(slot.groupName) || null;
+      const currentProxy = safeString(group?.now || slot.currentProxy, '');
+      if (currentProxy) slot.currentProxy = currentProxy;
+      return {
+        slotId: slot.slotId,
+        listenerName: slot.listenerName,
+        port: slot.port,
+        groupName: slot.groupName,
+        occupied: !!slot.leaseToken,
+        currentProxy,
+        leaseStartedAt: slot.leaseStartedAt,
+        lastUsedAt: slot.lastUsedAt,
+        accountId: slot.accountId,
+        modelKey: slot.modelKey,
+      };
+    });
+}
+
+function clearSlotRuntimePool() {
+  _slotLeases.clear();
+  syncSlotRuntimePool();
+  for (const slot of _slotStates.values()) {
+    slot.leaseToken = '';
+    slot.leaseStartedAt = 0;
+    slot.accountId = '';
+    slot.modelKey = '';
+    slot.reason = '';
+  }
+}
+
+async function withSlotReservationLock(fn) {
+  const waitFor = _slotReservationLock;
+  let release;
+  _slotReservationLock = new Promise((resolve) => {
+    release = resolve;
+  });
+  await waitFor.catch(() => {});
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+async function reserveClashSlot(meta = {}) {
+  return withSlotReservationLock(async () => {
+    syncSlotRuntimePool();
+    const slot = Array.from(_slotStates.values())
+      .sort((a, b) => (a.lastUsedAt || 0) - (b.lastUsedAt || 0) || a.slotId - b.slotId)
+      .find(item => !item.leaseToken);
+    if (!slot) return null;
+    const token = safeString(meta?.token, '') || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    slot.leaseToken = token;
+    slot.leaseStartedAt = Date.now();
+    slot.lastUsedAt = slot.leaseStartedAt;
+    slot.accountId = safeString(meta?.accountId, '');
+    slot.modelKey = safeString(meta?.modelKey, '');
+    slot.reason = safeString(meta?.reason, '');
+    _slotLeases.set(token, { slotId: slot.slotId, acquiredAt: slot.leaseStartedAt });
+    return {
+      token,
+      slotId: slot.slotId,
+      groupName: slot.groupName,
+      listenerName: slot.listenerName,
+      port: slot.port,
+    };
+  });
+}
+
+function releaseClashSlotLease(token = '') {
+  const normalizedToken = safeString(token, '');
+  if (!normalizedToken) return;
+  const lease = _slotLeases.get(normalizedToken);
+  _slotLeases.delete(normalizedToken);
+  if (!lease) return;
+  const slot = _slotStates.get(lease.slotId);
+  if (!slot || slot.leaseToken !== normalizedToken) return;
+  slot.leaseToken = '';
+  slot.leaseStartedAt = 0;
+  slot.lastUsedAt = Date.now();
+  slot.accountId = '';
+  slot.modelKey = '';
+  slot.reason = '';
+  saveState();
+}
 
 function getActiveStreamLockCount() {
   return _activeStreamLocks.size;
@@ -232,6 +418,30 @@ function buildRuntimeConfig() {
   const groupName = safeString(_state.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME;
   const testUrl = safeString(_state.testUrl, DEFAULT_TEST_URL) || DEFAULT_TEST_URL;
   const updateIntervalSeconds = Math.max(5, normalizePositiveInt(_state.updateIntervalMinutes, 60)) * 60;
+  const slotCount = getRandomSlotCount();
+  const slotGroupLines = [];
+  const slotListenerLines = [];
+  if (slotCount > 0) {
+    syncSlotRuntimePool();
+    for (let slotId = 1; slotId <= slotCount; slotId += 1) {
+      slotGroupLines.push(
+        `  - name: ${yamlString(getSlotGroupName(slotId))}`,
+        '    type: select',
+        '    use:',
+        '      - primary',
+        '    proxies:',
+        `      - ${yamlString(DEFAULT_AUTO_GROUP_NAME)}`,
+        `      - ${yamlString('DIRECT')}`,
+      );
+      slotListenerLines.push(
+        `  - name: ${yamlString(getSlotListenerName(slotId))}`,
+        '    type: mixed',
+        `    listen: ${yamlString('127.0.0.1')}`,
+        `    port: ${getSlotListenerPort(slotId)}`,
+        `    proxy: ${yamlString(getSlotGroupName(slotId))}`,
+      );
+    }
+  }
   const runtime = [
     `mixed-port: ${_state.mixedPort}`,
     `port: ${_state.httpPort}`,
@@ -271,6 +481,8 @@ function buildRuntimeConfig() {
     '    proxies:',
     `      - ${yamlString(DEFAULT_AUTO_GROUP_NAME)}`,
     `      - ${yamlString('DIRECT')}`,
+    ...slotGroupLines,
+    ...(slotListenerLines.length ? ['listeners:', ...slotListenerLines] : []),
     'rules:',
     `  - ${yamlString(`MATCH,${groupName}`)}`,
     '',
@@ -320,6 +532,7 @@ function loadState() {
   state.randomLastDelayGroup = safeString(state.randomLastDelayGroup, '');
   state.randomLastSwitchAt = parseInt(state.randomLastSwitchAt || '0', 10) || 0;
   state.randomLastSwitchProxy = safeString(state.randomLastSwitchProxy, '');
+  state.randomSlotCount = normalizeSlotCount(state.randomSlotCount, DEFAULT_STATE.randomSlotCount);
   state.delayCache = normalizeDelayCache(state.delayCache);
   state.mixedPort = normalizePort(state.mixedPort, DEFAULT_STATE.mixedPort);
   state.socksPort = normalizePort(state.socksPort, DEFAULT_STATE.socksPort);
@@ -362,6 +575,7 @@ function saveState() {
     randomLastDelayGroup: _state.randomLastDelayGroup,
     randomLastSwitchAt: _state.randomLastSwitchAt,
     randomLastSwitchProxy: _state.randomLastSwitchProxy,
+    randomSlotCount: getRandomSlotCount(),
     delayCache: normalizeDelayCache(_state.delayCache),
   };
   try {
@@ -442,6 +656,10 @@ function normalizeClashGroups(payload) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function getVisibleClashGroups(groups = []) {
+  return (groups || []).filter(group => !isInternalSlotGroupName(group?.name));
+}
+
 function resolveSelectedGroup(groups) {
   const preferred = safeString(_state.currentGroup || _state.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME;
   return groups.find(group => group.name === preferred)?.name
@@ -460,22 +678,25 @@ function syncCurrentSelection(groups, selectedGroup) {
   if (changed) saveState();
 }
 
-async function getClashGroups() {
+async function getClashGroups({ includeInternal = false } = {}) {
   if (!_ready || !isRunning()) {
     return {
       running: false,
       selectedGroup: safeString(_state.currentGroup || _state.groupName, DEFAULT_GROUP_NAME) || DEFAULT_GROUP_NAME,
       groups: [],
+      allGroups: [],
     };
   }
   const payload = await controllerRequest('/proxies');
-  const groups = normalizeClashGroups(payload);
-  const selectedGroup = resolveSelectedGroup(groups);
-  syncCurrentSelection(groups, selectedGroup);
+  const allGroups = normalizeClashGroups(payload);
+  const visibleGroups = getVisibleClashGroups(allGroups);
+  const selectedGroup = resolveSelectedGroup(visibleGroups);
+  syncCurrentSelection(visibleGroups, selectedGroup);
   return {
     running: true,
     selectedGroup,
-    groups,
+    groups: includeInternal ? allGroups : visibleGroups,
+    allGroups,
   };
 }
 
@@ -498,6 +719,7 @@ function attachProcessLogs(proc) {
   proc.on('exit', (code, signal) => {
     _ready = false;
     stopAutoDelayTimer();
+    clearSlotRuntimePool();
     _lastExit = { code, signal, at: Date.now() };
     _state.lastStoppedAt = Date.now();
     if (_proc === proc) _proc = null;
@@ -510,6 +732,7 @@ function attachProcessLogs(proc) {
   proc.on('error', (err) => {
     _ready = false;
     stopAutoDelayTimer();
+    clearSlotRuntimePool();
     _state.lastError = err.message;
     _lastExit = { code: null, signal: 'spawn_error', at: Date.now() };
     if (_proc === proc) _proc = null;
@@ -608,6 +831,8 @@ function buildRandomStatus(groups = [], selectedGroup = '') {
     lastSwitchProxy: _state.randomLastSwitchProxy,
     cachedResultsCount: cacheEntry.results.length,
     eligibleCount: candidates.length,
+    slotCount: getRandomSlotCount(),
+    activeSlotCount: getActiveSlotLeaseCount(),
     activeStreamCount: getActiveStreamLockCount(),
     switchGuardActive: getActiveStreamLockCount() > 0,
   };
@@ -669,6 +894,8 @@ export function getClashStatus(includeProfileBody = false) {
     randomLastDelayGroup: _state.randomLastDelayGroup,
     randomLastSwitchAt: _state.randomLastSwitchAt,
     randomLastSwitchProxy: _state.randomLastSwitchProxy,
+    randomSlotCount: getRandomSlotCount(),
+    activeSlotCount: getActiveSlotLeaseCount(),
     activeStreamCount: getActiveStreamLockCount(),
     randomSwitchGuardActive: getActiveStreamLockCount() > 0,
     proxy: getClashProxy(),
@@ -687,6 +914,7 @@ export async function getClashDashboardState({ includeProfileBody = false } = {}
     groupsCount: 0,
     groupsError: '',
     randomStatus: buildRandomStatus([], ''),
+    slotStatuses: buildSlotStatusList([]),
   };
   if (!state.running || !state.ready) return state;
   const [version, groupPayload] = await Promise.all([
@@ -694,13 +922,14 @@ export async function getClashDashboardState({ includeProfileBody = false } = {}
       state.lastError = err.message;
       return null;
     }),
-    getClashGroups().catch((err) => {
+    getClashGroups({ includeInternal: true }).catch((err) => {
       state.groupsError = err.message;
-      return { running: true, selectedGroup: '', groups: [] };
+      return { running: true, selectedGroup: '', groups: [], allGroups: [] };
     }),
   ]);
   state.controllerVersion = version;
-  state.groups = groupPayload.groups || [];
+  const allGroups = groupPayload.allGroups || groupPayload.groups || [];
+  state.groups = getVisibleClashGroups(allGroups);
   state.selectedGroup = groupPayload.selectedGroup || '';
   state.groupsCount = state.groups.length;
   if (state.selectedGroup) {
@@ -709,16 +938,21 @@ export async function getClashDashboardState({ includeProfileBody = false } = {}
     state.currentProxy = currentGroup?.now || state.currentProxy || '';
   }
   state.randomStatus = buildRandomStatus(state.groups, state.selectedGroup);
+  state.slotStatuses = buildSlotStatusList(allGroups);
   return state;
 }
 
 export function updateClashConfig(patch = {}) {
   let shouldClearDelayCache = false;
+  let shouldResetSlotPool = false;
   if (Object.prototype.hasOwnProperty.call(patch, 'enabled')) _state.enabled = parseBool(patch.enabled, _state.enabled);
   if (Object.prototype.hasOwnProperty.call(patch, 'autoStart')) _state.autoStart = parseBool(patch.autoStart, _state.autoStart);
   if (Object.prototype.hasOwnProperty.call(patch, 'takeoverEnabled')) _state.takeoverEnabled = parseBool(patch.takeoverEnabled, _state.takeoverEnabled);
   if (Object.prototype.hasOwnProperty.call(patch, 'binaryPath')) _state.binaryPath = safeString(patch.binaryPath, DEFAULT_STATE.binaryPath) || DEFAULT_STATE.binaryPath;
-  if (Object.prototype.hasOwnProperty.call(patch, 'mixedPort')) _state.mixedPort = normalizePort(patch.mixedPort, _state.mixedPort);
+  if (Object.prototype.hasOwnProperty.call(patch, 'mixedPort')) {
+    _state.mixedPort = normalizePort(patch.mixedPort, _state.mixedPort);
+    shouldResetSlotPool = true;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, 'socksPort')) _state.socksPort = normalizePort(patch.socksPort, _state.socksPort);
   if (Object.prototype.hasOwnProperty.call(patch, 'httpPort')) _state.httpPort = normalizePort(patch.httpPort, _state.httpPort);
   if (Object.prototype.hasOwnProperty.call(patch, 'controllerPort')) _state.controllerPort = normalizePort(patch.controllerPort, _state.controllerPort);
@@ -760,6 +994,11 @@ export function updateClashConfig(patch = {}) {
       _state.randomDelayCheckIntervalMinutes,
     );
   }
+  if (Object.prototype.hasOwnProperty.call(patch, 'randomSlotCount')) {
+    _state.randomSlotCount = normalizeSlotCount(patch.randomSlotCount, _state.randomSlotCount);
+    shouldResetSlotPool = true;
+  }
+  if (shouldResetSlotPool) clearSlotRuntimePool();
   if (shouldClearDelayCache) clearDelayCache();
   _state.lastError = '';
   saveState();
@@ -972,11 +1211,111 @@ async function maybeRandomizeClashNode(meta = {}) {
   return _randomSwitchPromise;
 }
 
+async function maybeRandomizeSlotNode(slotState, meta = {}) {
+  if (!slotState || !_ready || !isRunning()) {
+    return { switched: false, proxy: '', groupName: slotState?.groupName || '', unavailable: true };
+  }
+  const groupPayload = await getClashGroups({ includeInternal: true });
+  if (!groupPayload.running) {
+    return { switched: false, proxy: slotState.currentProxy || '', groupName: slotState.groupName, unavailable: true };
+  }
+  const targetGroup = groupPayload.groups.find(group => group.name === slotState.groupName) || null;
+  if (!targetGroup) {
+    return {
+      switched: false,
+      proxy: slotState.currentProxy || '',
+      groupName: slotState.groupName,
+      unavailable: true,
+    };
+  }
+  if (!_state.randomNodeEnabled) {
+    const currentProxy = safeString(targetGroup.now || slotState.currentProxy || '', '');
+    slotState.currentProxy = currentProxy;
+    slotState.lastUsedAt = Date.now();
+    saveState();
+    return {
+      switched: false,
+      proxy: currentProxy,
+      groupName: slotState.groupName,
+      candidates: 0,
+    };
+  }
+  const cacheEntry = await ensureRandomDelayCache(groupPayload.selectedGroup || _state.currentGroup || _state.groupName);
+  const candidates = getRandomCandidateNodes(targetGroup, cacheEntry.results);
+  if (!candidates.length) {
+    slotState.currentProxy = safeString(targetGroup.now || slotState.currentProxy || '', '');
+    slotState.lastUsedAt = Date.now();
+    saveState();
+    return {
+      switched: false,
+      proxy: targetGroup.now || slotState.currentProxy || '',
+      groupName: slotState.groupName,
+      candidates: 0,
+    };
+  }
+  const nextProxy = pickRandomNode(candidates, targetGroup.now || slotState.currentProxy || '');
+  if (!nextProxy) {
+    slotState.currentProxy = safeString(targetGroup.now || slotState.currentProxy || '', '');
+    slotState.lastUsedAt = Date.now();
+    saveState();
+    return {
+      switched: false,
+      proxy: targetGroup.now || slotState.currentProxy || '',
+      groupName: slotState.groupName,
+      candidates: candidates.length,
+    };
+  }
+  const switched = nextProxy !== targetGroup.now;
+  if (switched) {
+    await controllerRequest(`/proxies/${encodeURIComponent(slotState.groupName)}`, {
+      method: 'PUT',
+      body: { name: nextProxy },
+    });
+  }
+  slotState.currentProxy = nextProxy;
+  slotState.lastUsedAt = Date.now();
+  saveState();
+  if (meta?.reason) {
+    log.debug(`Clash slot node selected: slot=${slotState.slotId} proxy=${nextProxy} group=${slotState.groupName} reason=${meta.reason}`);
+  }
+  return {
+    switched,
+    proxy: nextProxy,
+    groupName: slotState.groupName,
+    candidates: candidates.length,
+  };
+}
+
 export async function testClashGroupDelays(groupName = '') {
   return runDelayTestForGroup(groupName);
 }
 
 export async function prepareClashForRequest(meta = {}) {
+  syncSlotRuntimePool();
+  if (safeString(meta?.mode, '') === 'slot') {
+    const baseProxy = getClashProxy();
+    if (!baseProxy) return null;
+    const lease = await reserveClashSlot(meta);
+    if (lease) {
+      const slotState = _slotStates.get(lease.slotId);
+      try {
+        const slotResult = await maybeRandomizeSlotNode(slotState, meta);
+        if (slotResult?.unavailable) {
+          releaseClashSlotLease(lease.token);
+          return getClashProxy();
+        }
+      } catch (err) {
+        log.warn(`Clash slot random selection failed: ${err.message}`);
+        releaseClashSlotLease(lease.token);
+        return getClashProxy();
+      }
+      saveState();
+      return {
+        ...buildClashSlotProxy(lease.slotId, slotState?.currentProxy || ''),
+        leaseToken: lease.token,
+      };
+    }
+  }
   const proxy = getClashProxy();
   if (!proxy) return null;
   try {
@@ -993,6 +1332,10 @@ export function acquireClashStreamGuard(meta = {}) {
 
 export function releaseClashStreamGuard(token = '') {
   endClashStreamGuard(token);
+}
+
+export function releaseClashProxyLease(token = '') {
+  releaseClashSlotLease(token);
 }
 
 export function getClashLogs(limit = _state.logLines) {
@@ -1047,6 +1390,7 @@ export async function startClash() {
 export async function stopClash() {
   _ready = false;
   stopAutoDelayTimer();
+  clearSlotRuntimePool();
   const proc = _proc;
   if (!proc || proc.exitCode != null) {
     _proc = null;

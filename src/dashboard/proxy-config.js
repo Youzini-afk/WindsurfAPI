@@ -5,7 +5,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { config, log } from '../config.js';
-import { getClashProxy, prepareClashForRequest } from '../clash.js';
+import { getClashProxy, prepareClashForRequest, releaseClashProxyLease } from '../clash.js';
 
 const PROXY_FILE = config.proxyConfigFile;
 
@@ -109,12 +109,22 @@ export function getEffectiveProxy(accountId) {
 }
 
 export async function prepareEffectiveProxy(accountId, options = {}) {
+  const leased = await prepareEffectiveProxyLeased(accountId, options);
+  return leased.proxy;
+}
+
+export async function prepareEffectiveProxyLeased(accountId, options = {}) {
   if (accountId && _config.perAccount[accountId]) {
-    return _config.perAccount[accountId];
+    return { proxy: _config.perAccount[accountId], release: () => {} };
   }
   const clashProxy = getClashProxy();
   if (clashProxy) {
-    return prepareClashForRequest({ accountId, ...options });
+    const proxy = await prepareClashForRequest({ accountId, ...options });
+    const release = (token = proxy?.leaseToken) => {
+      if (!token) return;
+      releaseClashProxyLease(token);
+    };
+    return { proxy, release };
   }
-  return _config.global;
+  return { proxy: _config.global, release: () => {} };
 }
