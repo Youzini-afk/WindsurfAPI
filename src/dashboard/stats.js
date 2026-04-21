@@ -15,6 +15,7 @@ const _state = {
   modelCounts: {},    // { "gpt-4o-mini": { requests, success, errors, totalMs } }
   accountCounts: {},  // { "abc123": { requests, success, errors } }
   hourlyBuckets: [],  // [{ hour: "2026-04-09T07:00:00Z", requests, errors }]
+  recentClientErrors: [],
 };
 
 // Load persisted stats
@@ -92,6 +93,26 @@ export function recordRequest(model, success, durationMs, accountId) {
   scheduleSave();
 }
 
+export function recordClientError(entry = {}) {
+  const item = {
+    time: Date.now(),
+    route: typeof entry.route === 'string' ? entry.route : '',
+    method: typeof entry.method === 'string' ? entry.method : '',
+    status: Number(entry.status) || 0,
+    type: typeof entry.type === 'string' ? entry.type : '',
+    message: typeof entry.message === 'string' ? entry.message : '',
+    model: typeof entry.model === 'string' ? entry.model : '',
+    stream: !!entry.stream,
+  };
+  if (!item.message && !item.type) return;
+  if (!Array.isArray(_state.recentClientErrors)) _state.recentClientErrors = [];
+  _state.recentClientErrors.unshift(item);
+  if (_state.recentClientErrors.length > 30) {
+    _state.recentClientErrors.length = 30;
+  }
+  scheduleSave();
+}
+
 function percentile(sortedArr, p) {
   if (!sortedArr.length) return 0;
   const idx = Math.min(sortedArr.length - 1, Math.floor(sortedArr.length * p));
@@ -102,6 +123,9 @@ function percentile(sortedArr, p) {
 export function getStats() {
   const out = { ..._state };
   out.modelCounts = {};
+  out.recentClientErrors = Array.isArray(_state.recentClientErrors)
+    ? _state.recentClientErrors.slice(0, 30)
+    : [];
   for (const [m, s] of Object.entries(_state.modelCounts)) {
     const sorted = (s.recentMs || []).slice().sort((a, b) => a - b);
     out.modelCounts[m] = {
@@ -125,6 +149,7 @@ export function resetStats() {
   _state.modelCounts = {};
   _state.accountCounts = {};
   _state.hourlyBuckets = [];
+  _state.recentClientErrors = [];
   _state.startedAt = Date.now();
   scheduleSave();
 }

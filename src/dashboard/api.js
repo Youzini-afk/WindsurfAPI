@@ -153,6 +153,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
         ? ((stats.successCount / stats.totalRequests) * 100).toFixed(1)
         : '0.0',
       cache: cacheStats(),
+      recentClientErrors: stats.recentClientErrors || [],
     });
   }
 

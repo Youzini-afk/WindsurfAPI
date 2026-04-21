@@ -9,7 +9,7 @@ import { getApiKey, acquireAccountByKey, reportError, reportSuccess, markRateLim
 import { resolveModel, getModelInfo } from '../models.js';
 import { getLsFor, ensureLs } from '../langserver.js';
 import { config, log } from '../config.js';
-import { recordRequest } from '../dashboard/stats.js';
+import { recordRequest, recordClientError } from '../dashboard/stats.js';
 import { isModelAllowed } from '../dashboard/model-access.js';
 import { cacheKey, cacheGet, cacheSet } from '../cache.js';
 import { isExperimentalEnabled, getIdentityPromptFor } from '../runtime-config.js';
@@ -166,6 +166,7 @@ export async function handleChatCompletions(body) {
     max_tokens,
     tools,
     tool_choice,
+    __clientRoute,
   } = body;
   // `messages` is `let` not `const` so the identity-prompt injection below
   // can prepend a system turn for the legacy path too.
@@ -174,6 +175,7 @@ export async function handleChatCompletions(body) {
   const modelKey = resolveModel(reqModel || config.defaultModel);
   const modelInfo = getModelInfo(modelKey);
   const displayModel = modelInfo?.name || reqModel || config.defaultModel;
+  const clientRoute = __clientRoute || '/v1/chat/completions';
   const modelEnum = modelInfo?.enumValue || 0;
   const modelUid = modelInfo?.modelUid || null;
   // Models with a modelUid use the Cascade flow (StartCascade → SendUserCascadeMessage).
@@ -553,7 +555,7 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
     }
     return {
       status: err.isModelError ? 403 : 502,
-      body: { error: { message: maskErrorMessage(sanitizeText(err.message)), type: err.isModelError ? 'model_not_available' : 'upstream_error' } },
+      body: { error: { message: sanitizeText(err.message), type: err.isModelError ? 'model_not_available' : 'upstream_error' } },
     };
   }
 }
@@ -917,6 +919,15 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
               choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
             log.warn(`Stream: partial response delivered then failed (${rawErrMsg})`);
           } else {
+            recordClientError({
+              route: clientRoute,
+              method: 'POST',
+              status: rl.allLimited ? 429 : (lastErr?.isModelError ? 403 : 502),
+              type: rl.allLimited ? 'rate_limit_exceeded' : (lastErr?.isModelError ? 'model_not_available' : 'upstream_error'),
+              message: rawErrMsg,
+              model,
+              stream: true,
+            });
             if (!rolePrinted) {
               send({ id, object: 'chat.completion.chunk', created, model,
                 choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });

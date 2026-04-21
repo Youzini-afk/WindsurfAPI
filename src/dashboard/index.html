@@ -1015,6 +1015,22 @@ window._firebaseOAuth = async function(provider) {
         <div id="ls-status"></div>
       </div>
     </div>
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <div class="section-title">最近客户端错误</div>
+          <div class="section-desc">最近 30 条原本会返回给 API 客户端的错误，未经过 masking 改写</div>
+        </div>
+      </div>
+      <div class="section-body tight">
+        <div class="table-wrap">
+          <table id="recent-client-errors-table">
+            <thead><tr><th>时间</th><th>路由</th><th>状态</th><th>类型</th><th>模型</th><th>消息</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- Windsurf Login -->
@@ -2182,6 +2198,21 @@ const App = {
         <span class="badge ${ls.running ? 'running' : 'stopped'}">${ls.running ? '运行中' : '已停止'}</span>
         <span class="text-sm text-muted" style="margin-left:12px">PID ${ls.pid || '-'} · 端口 ${ls.port || '-'} · 重启 ${ls.restartCount || 0} 次</span>
       `;
+    }
+    const recentErrors = d.recentClientErrors || [];
+    const recentErrorsBody = document.querySelector('#recent-client-errors-table tbody');
+    if (recentErrorsBody) {
+      recentErrorsBody.innerHTML = recentErrors.map(item => {
+        const statusClass = item.status >= 500 ? 'error' : item.status >= 400 ? 'warn' : 'info';
+        return `<tr>
+          <td class="text-sm nowrap">${item.time ? new Date(item.time).toLocaleString() : '-'}</td>
+          <td><code>${this.esc(item.route || '-')}</code>${item.stream ? ' <span class="badge info">SSE</span>' : ''}</td>
+          <td><span class="badge ${statusClass}">${item.status || '-'}</span></td>
+          <td><code>${this.esc(item.type || '-')}</code></td>
+          <td>${this.esc(item.model || '-')}</td>
+          <td style="max-width:520px;white-space:normal;word-break:break-word" title="${this.esc(item.message || '')}">${this.esc(item.message || '-')}</td>
+        </tr>`;
+      }).join('') || '<tr class="empty-row"><td colspan="6">暂无客户端错误</td></tr>';
     }
     this.poll('overview', () => this.loadOverview(), 15000);
   },

@@ -374,10 +374,11 @@ export async function handleMessages(body) {
   const msgId = genMsgId();
   const requestedModel = body.model || 'claude-sonnet-4.6';
   const wantStream = !!body.stream;
+  const clientRoute = body.__clientRoute || '/v1/messages';
   const openaiBody = anthropicToOpenAI(body);
 
   if (!wantStream) {
-    const result = await handleChatCompletions({ ...openaiBody, stream: false });
+    const result = await handleChatCompletions({ ...openaiBody, stream: false, __clientRoute: clientRoute });
     if (result.status !== 200) {
       return {
         status: result.status,
@@ -396,7 +397,7 @@ export async function handleMessages(body) {
   // Streaming path — ask handleChatCompletions for its streaming handler and
   // point its writes at our translator shim. This lets the upstream Cascade
   // poll loop drive the downstream SSE in real time — no buffer-then-replay.
-  const streamResult = await handleChatCompletions({ ...openaiBody, stream: true });
+  const streamResult = await handleChatCompletions({ ...openaiBody, stream: true, __clientRoute: clientRoute });
 
   if (!streamResult.stream) {
     // The OpenAI path returned a non-stream error (e.g. 403 model_not_entitled)

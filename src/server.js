@@ -27,6 +27,7 @@ import { getClashStatus } from './clash.js';
 import { maskErrorPayload } from './error-mask.js';
 import { config, log } from './config.js';
 import { getLsStatus } from './langserver.js';
+import { recordClientError } from './dashboard/stats.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -80,7 +81,51 @@ function extractToken(req) {
   return xApiKey;
 }
 
+function isExternalErrorRoute(path = '') {
+  return !!path && !path.startsWith('/dashboard') && path !== '/health' && path !== '/ready' && path !== '/favicon.ico';
+}
+
+function extractClientErrorDetails(body) {
+  if (typeof body === 'string') {
+    return { type: '', message: body };
+  }
+  if (!body || typeof body !== 'object') {
+    return { type: '', message: '' };
+  }
+  if (typeof body.error === 'string') {
+    return { type: typeof body.type === 'string' ? body.type : '', message: body.error };
+  }
+  if (body.error && typeof body.error === 'object') {
+    return {
+      type: typeof body.error.type === 'string' ? body.error.type : (typeof body.type === 'string' ? body.type : ''),
+      message: typeof body.error.message === 'string' ? body.error.message : '',
+    };
+  }
+  return {
+    type: typeof body.type === 'string' ? body.type : '',
+    message: typeof body.message === 'string' ? body.message : '',
+  };
+}
+
+function maybeRecordJsonClientError(res, status, body) {
+  if (status < 400) return;
+  const path = res.__requestPath || '';
+  if (!isExternalErrorRoute(path)) return;
+  const details = extractClientErrorDetails(body);
+  if (!details.message && !details.type) return;
+  recordClientError({
+    route: path,
+    method: res.__requestMethod || '',
+    status,
+    type: details.type,
+    message: details.message,
+    model: res.__requestModel || '',
+    stream: false,
+  });
+}
+
 function json(res, status, body) {
+  maybeRecordJsonClientError(res, status, body);
   const data = JSON.stringify(maskErrorPayload(body));
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -94,6 +139,8 @@ function json(res, status, body) {
 async function route(req, res) {
   const { method } = req;
   const path = req.url.split('?')[0];
+  res.__requestPath = path;
+  res.__requestMethod = method;
 
   if (method === 'OPTIONS') return json(res, 204, '');
   if (path === '/health') {
@@ -273,6 +320,7 @@ async function route(req, res) {
     try { body = JSON.parse(await readBody(req)); } catch {
       return json(res, 400, { error: { message: 'Invalid JSON', type: 'invalid_request' } });
     }
+    res.__requestModel = typeof body.model === 'string' ? body.model : '';
     if (!Array.isArray(body.messages)) {
       return json(res, 400, { error: { message: 'messages must be an array', type: 'invalid_request' } });
     }
@@ -280,7 +328,7 @@ async function route(req, res) {
       return json(res, 400, { error: { message: 'messages must contain at least 1 item', type: 'invalid_request' } });
     }
 
-    const result = await handleChatCompletions(body);
+    const result = await handleChatCompletions({ ...body, __clientRoute: '/v1/chat/completions' });
     if (result.stream) {
       res.writeHead(result.status, { 'Access-Control-Allow-Origin': '*', ...result.headers });
       await result.handler(res);
@@ -299,10 +347,11 @@ async function route(req, res) {
     try { body = JSON.parse(await readBody(req)); } catch {
       return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'Invalid JSON' } });
     }
+    res.__requestModel = typeof body.model === 'string' ? body.model : '';
     if (!Array.isArray(body.messages) || body.messages.length === 0) {
       return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'messages must be a non-empty array' } });
     }
-    const result = await handleMessages(body);
+    const result = await handleMessages({ ...body, __clientRoute: '/v1/messages' });
     if (result.stream) {
       res.writeHead(result.status, { 'Access-Control-Allow-Origin': '*', ...result.headers });
       await result.handler(res);
