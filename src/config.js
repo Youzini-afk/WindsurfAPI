@@ -45,7 +45,12 @@ const HOME_DIR = resolvePath(process.env.HOME_DIR || process.env.HOME || process
 const WINDSURF_HOME = resolvePath(process.env.WINDSURF_HOME, '/opt/windsurf');
 const WINDSURF_DATA_DIR = resolvePath(process.env.WINDSURF_DATA_DIR, resolve(WINDSURF_HOME, 'data'));
 const WORKSPACE_DIR = resolvePath(process.env.WORKSPACE_DIR, '/tmp/windsurf-workspace');
-const LS_BINARY_PATH = resolvePath(process.env.LS_BINARY_PATH, resolve(WINDSURF_HOME, 'language_server_linux_x64'));
+const LS_BINARY_PATH = resolvePath(
+  process.env.LS_BINARY_PATH,
+  process.platform === 'darwin'
+    ? resolve(process.env.HOME || process.env.USERPROFILE || HOME_DIR, '.windsurf', `language_server_macos_${process.arch === 'arm64' ? 'arm' : 'x64'}`)
+    : resolve(WINDSURF_HOME, 'language_server_linux_x64'),
+);
 const RUNTIME_CONFIG_FILE = resolvePath(process.env.RUNTIME_CONFIG_FILE, resolve(APP_DATA_DIR, 'runtime-config.json'));
 const ACCOUNTS_FILE = resolvePath(process.env.ACCOUNTS_FILE, resolve(APP_DATA_DIR, 'accounts.json'));
 const PROXY_CONFIG_FILE = resolvePath(process.env.PROXY_CONFIG_FILE, resolve(APP_DATA_DIR, 'proxy.json'));

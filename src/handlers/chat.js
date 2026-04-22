@@ -217,11 +217,14 @@ export async function handleChatCompletions(body) {
   // ── Model identity prompt injection ──
   // When enabled, prepend a system message so the model identifies itself as
   // the requested model (e.g. "I am Claude Opus 4.6") instead of leaking the
-  // Cascade/Windsurf backend identity. Inject into BOTH messages (for legacy
-  // RawGetChatMessage path) and cascadeMessages (Cascade path) — they diverge
-  // once tool-emulation rewrites the Cascade path, but the system identity
-  // should be identical in both.
-  if (isExperimentalEnabled('modelIdentityPrompt') && modelInfo?.provider) {
+  // Cascade/Windsurf backend identity.
+  //
+  // Skip identity injection when client already provides a system prompt
+  // (Claude Code / Cline / Cursor). Adding "You are Claude" on top of the
+  // client's system prompt triggers Cascade's anti-injection protection on
+  // reasoning models like opus-4-7. (#22)
+  const clientHasSystem = Array.isArray(messages) && messages.some(m => m?.role === 'system');
+  if (isExperimentalEnabled('modelIdentityPrompt') && modelInfo?.provider && !clientHasSystem) {
     const identityText = buildIdentitySystemMessage(displayModel, modelInfo.provider);
     if (identityText) {
       const sysMsg = { role: 'system', content: identityText };
@@ -287,10 +290,11 @@ export async function handleChatCompletions(body) {
   // pair so the Windsurf backend serves from its hot per-cascade context
   // instead of replaying the whole history.
   //
-  // Tool-emulation mode bypasses the reuse pool: fingerprint can't stably
-  // collapse a conversation whose assistant turns contain synthesised
-  //  markup and whose user turns contain <tool_result> wrappers.
-  const reuseEnabled = useCascade && !emulateTools && isExperimentalEnabled('cascadeConversationReuse');
+  // Conversation reuse lets Cascade keep server-side context across turns.
+  // Previously disabled for tool-emulation but that caused ALL Claude Code
+  // conversations to lose context after every turn (#24). A fingerprint miss
+  // just falls back to fresh cascade (no worse than before). (#24)
+  const reuseEnabled = useCascade && isExperimentalEnabled('cascadeConversationReuse');
   const fpBefore = reuseEnabled ? fingerprintBefore(messages) : null;
   let reuseEntry = reuseEnabled ? poolCheckout(fpBefore) : null;
   if (reuseEntry) log.info(`Chat: cascade reuse HIT cascadeId=${reuseEntry.cascadeId.slice(0, 8)}… model=${displayModel}`);
@@ -474,7 +478,7 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
     // Check the cascade back into the pool under the *post-turn* fingerprint
     // so the next request in the same conversation can resume it.
     if (poolCtx && cascadeMeta?.cascadeId && allText) {
-      const fpAfter = fingerprintAfter(messages, allText);
+      const fpAfter = fingerprintAfter(messages);
       poolCheckin(fpAfter, {
         cascadeId: cascadeMeta.cascadeId,
         sessionId: cascadeMeta.sessionId,
@@ -686,10 +690,10 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
       let accText = '';
       let accThinking = '';
 
-      // Cascade conversation pool (experimental, stream path) — bypassed in
-      // tool-emulation mode because the fingerprint can't collapse turns
-      // whose bodies carry  tool_result markup.
-      const reuseEnabled = useCascade && !emulateTools && isExperimentalEnabled('cascadeConversationReuse');
+      // Conversation reuse lets Cascade keep server-side context across turns.
+      // A fingerprint miss just falls back to a fresh cascade, so enabling it
+      // for tool-emulation is still a net win versus always losing context.
+      const reuseEnabled = useCascade && isExperimentalEnabled('cascadeConversationReuse');
       const fpBefore = reuseEnabled ? fingerprintBefore(messages) : null;
       let reuseEntry = reuseEnabled ? poolCheckout(fpBefore) : null;
       if (reuseEntry) log.info(`Chat: cascade reuse HIT cascadeId=${reuseEntry.cascadeId.slice(0, 8)}… stream model=${model}`);
@@ -870,7 +874,7 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
             emitThinking(pathStreamThinking.flush());
             // Pool check-in on success (cascade only)
             if (reuseEnabled && cascadeResult?.cascadeId && accText) {
-              const fpAfter = fingerprintAfter(messages, accText);
+              const fpAfter = fingerprintAfter(messages);
               poolCheckin(fpAfter, {
                 cascadeId: cascadeResult.cascadeId,
                 sessionId: cascadeResult.sessionId,

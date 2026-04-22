@@ -89,12 +89,13 @@ function parseBulkLoginText(text) {
   return items;
 }
 
-async function executeWindsurfLogin({ email, password, loginProxy, autoAdd }) {
+async function processWindsurfLogin({ email, password, loginProxy, autoAdd }) {
   if (!email || !password) {
-    const err = new Error('email 和 password 為必填');
+    const err = new Error('email 和 password 为必填');
     err.statusCode = 400;
     throw err;
   }
+
   const proxy = loginProxy?.host ? loginProxy : (await prepareEffectiveProxy(null, { reason: 'windsurf_login' }) || null);
   const result = await windsurfLogin(email, password, proxy);
   let account = null;
@@ -677,10 +678,49 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
   // ─── Windsurf Login ────────────────────────────────────
   if (subpath === '/windsurf-login' && method === 'POST') {
     try {
-      const { email, password, proxy: loginProxy, autoAdd } = body;
-      return json(res, 200, await executeWindsurfLogin({ email, password, loginProxy, autoAdd }));
+      const { email, password, proxy: loginProxy, autoAdd } = body || {};
+      return json(res, 200, await processWindsurfLogin({ email, password, loginProxy, autoAdd }));
     } catch (err) {
-      return json(res, 400, { error: err.message, isAuthFail: !!err.isAuthFail, firebaseCode: err.firebaseCode });
+      return json(res, err.statusCode || 400, { error: err.message, isAuthFail: !!err.isAuthFail, firebaseCode: err.firebaseCode });
+    }
+  }
+
+  if (subpath === '/windsurf-login/batch' && method === 'POST') {
+    try {
+      const { accounts, proxy: loginProxy, autoAdd } = body || {};
+      if (!Array.isArray(accounts) || !accounts.length) {
+        return json(res, 400, { error: 'accounts 为必填数组' });
+      }
+
+      const results = [];
+      for (const acct of accounts) {
+        const email = String(acct?.email || '').trim();
+        const password = String(acct?.password || '').trim();
+        try {
+          const result = await processWindsurfLogin({ email, password, loginProxy, autoAdd });
+          results.push(result);
+        } catch (err) {
+          results.push({
+            success: false,
+            email,
+            error: err.message,
+            isAuthFail: !!err.isAuthFail,
+            firebaseCode: err.firebaseCode,
+          });
+        }
+      }
+
+      const successCount = results.filter(r => r.success).length;
+      const failCount = results.length - successCount;
+      return json(res, 200, {
+        success: true,
+        total: results.length,
+        successCount,
+        failCount,
+        results,
+      });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
     }
   }
 
@@ -705,7 +745,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
           continue;
         }
         try {
-          const result = await executeWindsurfLogin({ email: item.email, password: item.password, loginProxy, autoAdd });
+          const result = await processWindsurfLogin({ email: item.email, password: item.password, loginProxy, autoAdd });
           results.push({
             line: item.line,
             email: item.email,

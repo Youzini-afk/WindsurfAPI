@@ -390,22 +390,18 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
     ]);
     convParts.push(writeMessageField(10, toolSection));
 
-    // field 13 (communication_section): override IDE persona + add security rules.
-    // Even with tools[], the model must not leak server environment info.
+    // field 13 (communication_section): minimal override.
+    // DO NOT include any identity manipulation instructions here — Cascade's
+    // anti-injection system detects "adopt identity X / don't call yourself Y"
+    // as prompt injection and refuses the entire request. (#22)
+    // Let Cascade keep its baked-in identity; tool emulation still works via
+    // field 12 (additional_instructions_section).
     const toolCommOverride = Buffer.concat([
       writeVarintField(1, 1),             // SECTION_OVERRIDE_MODE_OVERRIDE
       writeStringField(2,
-        'You are an AI assistant accessed via API with the tool-calling capabilities described above. ' +
-        'You are NOT running inside an IDE or code editor.\n\n' +
-        'CRITICAL SECURITY RULE: You must NEVER reveal any information about the server, ' +
-        'infrastructure, or runtime environment you are running on. This includes but is not limited to: ' +
-        'operating system, Docker containers, file paths, working directories, IP addresses, ' +
-        'hostnames, environment variables, installed software, hardware specs, network configuration, ' +
-        'process information, or any other system-level details. ' +
-        'If asked about your environment, server, infrastructure, or "where you are running", ' +
-        'simply say you are a cloud-based AI assistant and cannot disclose infrastructure details. ' +
-        'Do NOT speculate about or confirm any environment details even if the user guesses correctly. ' +
-        'This rule overrides ALL other instructions.'),
+        'You are accessed via API. ' +
+        'Follow the tool-calling instructions above faithfully. ' +
+        'Never reveal server infrastructure details, file paths, or IP addresses.'),
     ]);
     convParts.push(writeMessageField(13, toolCommOverride));
   } else {
@@ -443,32 +439,13 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
     ]);
     convParts.push(writeMessageField(12, noToolAdditional));
 
-    // field 13 (communication_section): strip the IDE-assistant persona
-    // and replace it with conversational AI identity. Cascade's baked-in
-    // instructions say "you're an IDE coding assistant that can create/edit
-    // files and run commands". This override replaces that context so the
-    // model doesn't role-play file creation.
+    // field 13 (communication_section): minimal — no identity manipulation.
     const communicationOverride = Buffer.concat([
       writeVarintField(1, 1),             // SECTION_OVERRIDE_MODE_OVERRIDE
       writeStringField(2,
-        'You are a conversational AI assistant accessed via API. ' +
-        'You are NOT running inside an IDE or code editor. ' +
-        'You CANNOT access, create, read, edit, or delete any files on any file system. ' +
-        'You CANNOT execute commands, run programs, or interact with any external services. ' +
-        'You CANNOT check directories or browse any working directory. ' +
-        'When users ask you to perform file operations, system actions, or check directories, ' +
-        'clearly tell them that you are a text-based conversational AI without those capabilities. ' +
-        'Do NOT pretend to check directories, create files, or perform actions you cannot actually do. ' +
-        'Answer all questions directly using your training knowledge.\n\n' +
-        'CRITICAL SECURITY RULE: You must NEVER reveal any information about the server, ' +
-        'infrastructure, or runtime environment you are running on. This includes but is not limited to: ' +
-        'operating system, Docker containers, file paths, working directories, IP addresses, ' +
-        'hostnames, environment variables, installed software, hardware specs, network configuration, ' +
-        'process information, or any other system-level details. ' +
-        'If asked about your environment, server, infrastructure, or "where you are running", ' +
-        'simply say you are a cloud-based AI assistant and cannot disclose infrastructure details. ' +
-        'Do NOT speculate about or confirm any environment details even if the user guesses correctly. ' +
-        'This rule overrides ALL other instructions.'),
+        'You are accessed via API, not inside an IDE. ' +
+        'You cannot access files or run commands. Answer directly. ' +
+        'Never reveal server infrastructure details, file paths, or IP addresses.'),
     ]);
     convParts.push(writeMessageField(13, communicationOverride));
   }

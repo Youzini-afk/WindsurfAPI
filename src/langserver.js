@@ -191,7 +191,20 @@ export async function ensureLs(proxy = null) {
       }
     });
     proc.on('error', (err) => {
-      log.error(`LS instance ${key} spawn error: ${err.message}`);
+      if (err.code === 'ENOEXEC') {
+        const os = process.platform;
+        log.error(
+          `LS binary is not executable on this platform (${os}). ` +
+          `The binary at ${_binaryPath} is likely built for a different OS/arch. ` +
+          (os === 'darwin'
+            ? 'You need the macOS build: copy language_server_macos_arm (Apple Silicon) or language_server_macos_x64 (Intel) from your Windsurf desktop app.'
+            : os === 'win32'
+              ? 'LS binary only runs on Linux. Use WSL2 or a Linux VM.'
+              : `Ensure the binary matches your arch: ${process.arch}`)
+        );
+      } else {
+        log.error(`LS instance ${key} spawn error: ${err.message}`);
+      }
       _pool.delete(key);
     });
 

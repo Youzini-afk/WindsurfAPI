@@ -22,7 +22,7 @@
 
 import { createHash } from 'crypto';
 
-const POOL_TTL_MS = 10 * 60 * 1000;
+const POOL_TTL_MS = 30 * 60 * 1000;
 const POOL_MAX = 500;
 
 // fingerprint -> { cascadeId, sessionId, lsPort, apiKey, createdAt, lastAccess }
@@ -51,27 +51,28 @@ function canonicalise(messages) {
 }
 
 /**
- * Fingerprint for "resume this conversation". Uses all messages except the
- * latest user turn, which is the one we're about to forward.
- * Returns null when there's nothing to resume (first turn or no prior
- * assistant reply).
+ * Fingerprint for "resume this conversation". Hash only USER messages
+ * (excluding the latest one we're about to send). User messages have stable
+ * format across client round-trips; assistant messages don't — the client
+ * may restructure content arrays, add tool_use blocks, or modify text,
+ * causing hash mismatches and 0% hit rate. (#24)
  */
 export function fingerprintBefore(messages) {
   if (!Array.isArray(messages) || messages.length < 2) return null;
-  // Must have at least one assistant turn in the history — otherwise the
-  // previous "cascade" never actually existed from our side.
-  const history = messages.slice(0, -1);
-  if (!history.some(m => m.role === 'assistant')) return null;
-  return sha256(JSON.stringify(canonicalise(history)));
+  const users = messages.filter(m => m.role === 'user');
+  if (users.length < 2) return null;
+  return sha256(JSON.stringify(canonicalise(users.slice(0, -1))));
 }
 
 /**
- * Fingerprint for the full conversation after we append our assistant turn.
- * This is what the *next* request's `fingerprintBefore` will look up.
+ * Fingerprint for the full conversation after this turn completes.
+ * Uses all user messages (including current). The *next* request's
+ * `fingerprintBefore` will hash users[:-1] which equals this value.
  */
-export function fingerprintAfter(messages, assistantText) {
-  const full = [...messages, { role: 'assistant', content: assistantText || '' }];
-  return sha256(JSON.stringify(canonicalise(full)));
+export function fingerprintAfter(messages) {
+  const users = messages.filter(m => m.role === 'user');
+  if (!users.length) return null;
+  return sha256(JSON.stringify(canonicalise(users)));
 }
 
 function prune(now) {
