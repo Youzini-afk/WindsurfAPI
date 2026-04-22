@@ -4,19 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Windsurf API · 把 Windsurf 變成 OpenAI + Anthropic 相容端點</title>
-<meta name="description" content="無頭運行 Windsurf 的 107 個 AI 模型，同時支援 /v1/chat/completions 與 /v1/messages 雙協定。Claude Code、Cursor、Cline 直接連。零 npm 依賴。">
+<meta name="description" content="無頭運行 Windsurf 的 AI 模型，同時支援 /v1/chat/completions 與 /v1/messages 雙協定。Claude Code、Cursor、Cline 直接連。零 npm 依賴。">
 <meta name="theme-color" content="#FAF9F5">
 <meta property="og:title" content="Windsurf API">
-<meta property="og:description" content="107 個模型 · 雙協定 · 零依賴">
+<meta property="og:description" content="雙協定 · 零依賴 · Docker 就緒">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E3%80%B0%EF%B8%8F%3C/text%3E%3C/svg%3E">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
 :root{
-  /* Claude paper palette */
   --bg:#FAF9F5;
-  --bg-alt:#F3F0E6;
+  --bg-alt:#F5F2EB;
   --paper:#FFFFFF;
   --ink:#1A1612;
   --ink-soft:#3D362C;
@@ -24,363 +23,128 @@ html{scroll-behavior:smooth}
   --muted-soft:#A09888;
   --rule:#E7E2D4;
   --rule-soft:#EFEBDF;
-  /* Claude coral */
-  --claude:#CC785C;
-  --claude-deep:#A05234;
-  --claude-soft:#F2DCD0;
-  --claude-wash:#FBF1EB;
-  /* Windsurf ocean */
-  --surf:#00C8B4;
-  --surf-deep:#0B8F80;
-  --surf-soft:#CCF2ED;
-  --surf-wash:#EAF9F6;
-  /* Other accents */
+  --coral:#CC785C;
+  --coral-deep:#A05234;
+  --coral-soft:#F2DCD0;
+  --coral-wash:#FBF1EB;
   --plum:#8B6FB0;
-  --sun:#D4A574;
+  --sand:#D4A574;
 
-  --serif: 'Iowan Old Style','Palatino Linotype','Palatino','URW Palladio L','P052',Georgia,serif;
-  --sans: -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;
-  --mono: ui-monospace,'SF Mono','JetBrains Mono',Menlo,Consolas,monospace;
-
-  --shadow-sm: 0 1px 2px rgba(26,22,18,.04), 0 1px 1px rgba(26,22,18,.03);
-  --shadow: 0 4px 16px rgba(26,22,18,.06), 0 2px 4px rgba(26,22,18,.04);
-  --shadow-lg: 0 24px 48px -12px rgba(26,22,18,.12), 0 8px 16px -4px rgba(26,22,18,.06);
-  --shadow-paper: 0 0 0 1px rgba(26,22,18,.04), 0 2px 8px rgba(26,22,18,.04), 0 16px 32px -8px rgba(26,22,18,.06);
+  --serif:'Charter','Iowan Old Style','Palatino Linotype','Palatino','URW Palladio L','P052','Noto Serif TC',Georgia,serif;
+  --sans:'Helvetica Neue','Segoe UI',-apple-system,BlinkMacSystemFont,'PingFang TC','Microsoft JhengHei',system-ui,sans-serif;
+  --mono:'SF Mono','JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
 }
-
 body{
-  background:var(--bg);
-  color:var(--ink);
-  font-family:var(--sans);
-  font-size:16.5px;
-  line-height:1.65;
-  -webkit-font-smoothing:antialiased;
-  text-rendering:optimizeLegibility;
-  overflow-x:hidden;
+  background:var(--bg);color:var(--ink);
+  font-family:var(--sans);font-size:16.5px;line-height:1.72;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  letter-spacing:.01em;
 }
 body::before{
-  /* Subtle paper grain */
   content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
-  background-image:
-    radial-gradient(rgba(26,22,18,.015) 1px,transparent 1px),
-    radial-gradient(rgba(26,22,18,.015) 1px,transparent 1px);
-  background-size:48px 48px, 23px 23px;
-  background-position:0 0, 11px 11px;
-  mix-blend-mode:multiply;
-}
-a{color:var(--claude);text-decoration:none;transition:color .15s}
-a:hover{color:var(--claude-deep)}
-code{font-family:var(--mono);font-size:.9em;background:var(--rule-soft);padding:.08em .35em;border-radius:4px;color:var(--ink-soft)}
-
-.container{max-width:1180px;margin:0 auto;padding:0 2rem;position:relative;z-index:1}
-.narrow{max-width:860px;margin:0 auto;padding:0 2rem;position:relative;z-index:1}
-section{padding:6rem 0;position:relative}
-
-h1,h2,h3,h4{font-family:var(--serif);font-weight:500;letter-spacing:-.01em;color:var(--ink)}
-.kicker{font-family:var(--sans);font-size:.82rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--claude);margin-bottom:1rem}
-.section-title{font-size:2.4rem;line-height:1.15;margin-bottom:1rem;font-weight:500}
-.section-title em{font-style:italic;color:var(--claude);font-weight:400}
-.section-sub{color:var(--muted);font-size:1.05rem;max-width:560px;margin-bottom:3rem;font-family:var(--sans)}
-
-/* ═══════════ Nav ═══════════ */
-nav{
-  position:sticky;top:0;z-index:50;
-  backdrop-filter:blur(10px) saturate(140%);-webkit-backdrop-filter:blur(10px) saturate(140%);
-  background:rgba(250,249,245,.78);
-  border-bottom:1px solid var(--rule);
-}
-nav .nav-inner{
-  max-width:1180px;margin:0 auto;padding:.9rem 2rem;
-  display:flex;align-items:center;justify-content:space-between;gap:1rem;
-}
-nav .logo{
-  font-family:var(--serif);font-size:1.15rem;font-weight:500;letter-spacing:-.01em;
-  display:flex;align-items:center;gap:.55rem;color:var(--ink);
-}
-nav .logo .mark{
-  width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
-}
-nav .logo .mark svg{width:100%;height:100%}
-nav .nav-links{display:flex;gap:1.6rem;font-size:.92rem;align-items:center}
-nav .nav-links a{color:var(--muted);font-family:var(--sans);font-weight:500}
-nav .nav-links a:hover{color:var(--ink)}
-nav .nav-cta{
-  font-size:.88rem;padding:.48rem .95rem;border-radius:999px;
-  background:var(--ink);color:var(--bg);font-weight:500;font-family:var(--sans);
-  display:inline-flex;align-items:center;gap:.4rem;
-  transition:transform .15s, background .15s;
-}
-nav .nav-cta:hover{background:var(--claude-deep);color:#fff;transform:translateY(-1px)}
-@media (max-width:720px){ nav .nav-links{display:none} }
-
-/* ═══════════ Hero ═══════════ */
-.hero{
-  padding:5rem 0 4rem;
-  position:relative;
-  overflow:hidden;
-}
-.hero-grid{
-  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);
-  gap:3.5rem;align-items:center;max-width:1180px;margin:0 auto;padding:0 2rem;
-  position:relative;z-index:2;
-}
-@media (max-width:960px){ .hero-grid{grid-template-columns:1fr;gap:2.5rem} }
-
-.hero-eyebrow{
-  display:inline-flex;align-items:center;gap:.55rem;
-  padding:.4rem .85rem;border-radius:999px;
-  background:var(--claude-wash);color:var(--claude-deep);
-  font-size:.82rem;font-weight:500;font-family:var(--sans);
-  border:1px solid var(--claude-soft);
-  margin-bottom:1.75rem;
-}
-.hero-eyebrow .pulse{
-  width:7px;height:7px;border-radius:50%;background:var(--claude);
-  position:relative;flex-shrink:0;
-}
-.hero-eyebrow .pulse::after{
-  content:"";position:absolute;inset:-3px;border-radius:50%;
-  background:var(--claude);opacity:.35;animation:ping 2s ease-out infinite;
-}
-@keyframes ping{0%{transform:scale(.6);opacity:.7}80%,100%{transform:scale(2);opacity:0}}
-
-.hero h1{
-  font-size:clamp(2.4rem, 5.2vw, 4rem);
-  line-height:1.05;
-  margin-bottom:1.5rem;
-  font-weight:500;
-  letter-spacing:-.025em;
-}
-.hero h1 .ink{color:var(--ink)}
-.hero h1 em{font-style:italic;color:var(--claude);font-weight:400}
-.hero h1 .underline{
-  background:linear-gradient(180deg,transparent 68%,var(--surf-soft) 68%,var(--surf-soft) 96%,transparent 96%);
-  padding:0 .1em;
-}
-.hero .lede{
-  font-size:1.18rem;color:var(--ink-soft);line-height:1.55;
-  max-width:520px;margin-bottom:2rem;font-family:var(--sans);
-}
-.hero .hero-cta{display:flex;gap:.8rem;flex-wrap:wrap;margin-bottom:2rem}
-.btn{
-  display:inline-flex;align-items:center;gap:.5rem;
-  padding:.8rem 1.4rem;border-radius:999px;
-  font-size:.95rem;font-weight:500;font-family:var(--sans);
-  cursor:pointer;transition:all .2s;border:1px solid transparent;
-  text-decoration:none;
-}
-.btn-primary{background:var(--ink);color:var(--bg)}
-.btn-primary:hover{background:var(--claude-deep);color:#fff;transform:translateY(-1px);box-shadow:0 10px 24px -8px rgba(160,82,52,.45)}
-.btn-ghost{background:transparent;color:var(--ink);border-color:var(--rule)}
-.btn-ghost:hover{border-color:var(--ink);color:var(--ink)}
-.btn svg{width:15px;height:15px}
-
-.hero-meta{
-  display:flex;gap:1.5rem;flex-wrap:wrap;font-size:.88rem;color:var(--muted);font-family:var(--sans);
-}
-.hero-meta span{display:inline-flex;align-items:center;gap:.4rem}
-.hero-meta svg{width:14px;height:14px;color:var(--surf-deep)}
-
-/* Terminal */
-.terminal{
-  background:#1E1B17;
-  border-radius:14px;
-  box-shadow:var(--shadow-lg), 0 40px 80px -20px rgba(160,82,52,.18);
-  overflow:hidden;
-  font-family:var(--mono);
-  position:relative;
-  transform:translateY(0);
-  border:1px solid rgba(255,255,255,.04);
-}
-.terminal::before{
-  content:"";position:absolute;inset:0;pointer-events:none;
   background:
-    radial-gradient(ellipse at top left, rgba(204,120,92,.08), transparent 50%),
-    radial-gradient(ellipse at bottom right, rgba(0,200,180,.06), transparent 50%);
+    radial-gradient(ellipse at 25% 0%,rgba(204,120,92,.03),transparent 55%),
+    radial-gradient(ellipse at 80% 100%,rgba(139,111,176,.02),transparent 50%);
 }
-.terminal-bar{
-  display:flex;align-items:center;gap:.5rem;
-  padding:.7rem .95rem;
-  background:linear-gradient(180deg,#2A2520,#221E19);
-  border-bottom:1px solid rgba(255,255,255,.05);
-  position:relative;
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.02'/%3E%3C/svg%3E");
+  background-size:200px 200px;
 }
-.terminal-dots{display:flex;gap:.4rem}
-.terminal-dots span{width:11px;height:11px;border-radius:50%;background:#4A433B}
-.terminal-dots span:nth-child(1){background:#FF5F57}
-.terminal-dots span:nth-child(2){background:#FEBC2E}
-.terminal-dots span:nth-child(3){background:#28C840}
-.terminal-title{
-  color:#A09888;font-size:.78rem;font-weight:500;
-  position:absolute;left:50%;transform:translateX(-50%);
-  letter-spacing:.02em;
-}
-.terminal-title .tag{
-  color:var(--claude);font-weight:600;
-}
-.terminal-body{
-  padding:1.3rem 1.5rem 1.8rem;
-  height:420px;
-  overflow:hidden;
-  color:#E8E2D4;
-  font-size:.84rem;
-  line-height:1.75;
-  position:relative;
-}
-.terminal-body::after{
-  content:"";position:absolute;left:0;right:0;bottom:0;height:60px;
-  background:linear-gradient(180deg,transparent,#1E1B17 85%);
-  pointer-events:none;
-}
-.term-line{min-height:1.5em;white-space:pre-wrap;word-break:break-all}
-.term-prompt{color:var(--claude);font-weight:500}
-.term-cmd{color:#E8E2D4}
-.term-flag{color:#D4A574}
-.term-str{color:#A8C98A}
-.term-key{color:var(--surf)}
-.term-comment{color:#6B6556;font-style:italic}
-.term-meta{color:#706A5C;font-size:.78rem}
-.term-caret{display:inline-block;width:.52em;height:1em;background:var(--claude);margin-left:2px;vertical-align:text-bottom;animation:caret 1s step-end infinite}
-@keyframes caret{50%{opacity:0}}
+a{color:var(--coral);text-decoration:none;transition:color .2s ease}
+a:hover{color:var(--coral-deep)}
+code{font-family:var(--mono);font-size:.88em;background:var(--rule-soft);padding:.1em .35em;border-radius:3px;color:var(--ink-soft)}
+.container{max-width:1080px;margin:0 auto;padding:0 2rem;position:relative}
+.narrow{max-width:780px;margin:0 auto;padding:0 2rem}
+section{padding:5.5rem 0}
+h1,h2,h3,h4{font-family:var(--serif);font-weight:500;letter-spacing:-.015em;color:var(--ink)}
+.kicker{font-family:var(--sans);font-size:.74rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--coral);margin-bottom:.9rem;opacity:.85}
+.section-title{font-size:2.4rem;line-height:1.14;margin-bottom:.9rem;font-weight:500}
+.section-title em{font-style:italic;color:var(--coral);font-weight:400}
+.section-sub{color:var(--muted);font-size:1.02rem;max-width:540px;margin-bottom:2.5rem;line-height:1.65}
 
-/* Hero wave (Windsurf) */
-.hero-wave{
-  position:absolute;left:0;right:0;bottom:-1px;width:100%;
-  z-index:1;pointer-events:none;
-  line-height:0;
-  opacity:.9;
-}
-.hero-wave svg{width:100%;height:120px;display:block}
+/* ── Nav ── */
+nav{position:sticky;top:0;z-index:50;background:rgba(250,249,245,.92);border-bottom:1px solid var(--rule);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+nav .nav-inner{max-width:1080px;margin:0 auto;padding:.8rem 2rem;display:flex;align-items:center;justify-content:space-between;gap:1rem}
+nav .logo{font-family:var(--serif);font-size:1.1rem;font-weight:500;color:var(--ink);display:flex;align-items:center;gap:.5rem}
+nav .nav-links{display:flex;gap:1.4rem;font-size:.88rem}
+nav .nav-links a{color:var(--muted);font-weight:500;position:relative}
+nav .nav-links a::after{content:"";position:absolute;left:0;bottom:-2px;width:0;height:1.5px;background:var(--coral);transition:width .25s ease}
+nav .nav-links a:hover{color:var(--ink)}
+nav .nav-links a:hover::after{width:100%}
+nav .nav-cta{font-size:.84rem;padding:.45rem .9rem;border-radius:6px;background:var(--ink);color:var(--bg);font-weight:500;display:inline-flex;align-items:center;gap:.35rem;transition:background .15s}
+nav .nav-cta:hover{background:var(--coral-deep);color:#fff}
+@media(max-width:720px){nav .nav-links{display:none}}
 
-/* ═══════════ Stats ═══════════ */
-.stats{
-  background:var(--bg-alt);
-  border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
-  padding:4rem 0;
-}
-.stats-grid{
-  display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
-  background:var(--rule);
-  border:1px solid var(--rule);border-radius:16px;overflow:hidden;
-  box-shadow:var(--shadow-sm);
-}
-@media (max-width:760px){ .stats-grid{grid-template-columns:repeat(2,1fr)} }
-.stat{
-  background:var(--paper);
-  padding:2.2rem 1.5rem;text-align:center;
-  position:relative;transition:background .3s;
-}
-.stat:hover{background:var(--claude-wash)}
-.stat .num{
-  font-family:var(--serif);
-  font-size:3.4rem;line-height:1;font-weight:500;
-  color:var(--ink);letter-spacing:-.03em;
-  display:inline-block;
-}
-.stat .num::after{content:attr(data-suffix);font-size:.5em;color:var(--claude);margin-left:.1em;vertical-align:top}
-.stat .label{
-  margin-top:.6rem;color:var(--muted);font-size:.88rem;font-family:var(--sans);font-weight:500;
-  letter-spacing:.02em;
-}
+/* ── Hero ── */
+.hero{padding:6rem 0 5rem;border-bottom:1px solid var(--rule)}
+.hero-inner{max-width:680px}
+.hero-badge{display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .7rem;border-radius:4px;background:var(--coral-wash);color:var(--coral-deep);font-size:.78rem;font-weight:500;margin-bottom:1.8rem;border:1px solid var(--coral-soft)}
+.hero h1{font-size:clamp(2.4rem,5vw,3.6rem);line-height:1.06;margin-bottom:1.5rem;letter-spacing:-.025em;font-weight:500}
+.hero h1 em{font-style:italic;color:var(--coral);font-weight:400}
+.hero h1 .hl{background:linear-gradient(180deg,transparent 62%,var(--coral-soft) 62%,var(--coral-soft) 92%,transparent 92%);padding:0 .06em}
+.hero .lede{font-size:1.12rem;color:var(--ink-soft);line-height:1.6;max-width:560px;margin-bottom:2rem}
+.hero-cta{display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:1.8rem}
+.btn{display:inline-flex;align-items:center;gap:.4rem;padding:.7rem 1.2rem;border-radius:6px;font-size:.92rem;font-weight:500;cursor:pointer;transition:all .15s;border:1px solid transparent;text-decoration:none}
+.btn-primary{background:var(--ink);color:var(--bg)}
+.btn-primary:hover{background:var(--coral-deep);color:#fff;transform:translateY(-1px);box-shadow:0 6px 20px -6px rgba(160,82,52,.35)}
+.btn-ghost{background:transparent;color:var(--ink);border-color:var(--rule)}
+.btn-ghost:hover{border-color:var(--muted-soft);transform:translateY(-1px)}
+.btn svg{width:14px;height:14px}
+.hero-meta{display:flex;gap:1.2rem;flex-wrap:wrap;font-size:.84rem;color:var(--muted)}
+.hero-meta span{display:inline-flex;align-items:center;gap:.3rem}
 
-/* ═══════════ Dual Protocol ═══════════ */
-.dual-protocol .proto-grid{
-  display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;
-  margin-top:2rem;
-}
-@media (max-width:860px){ .dual-protocol .proto-grid{grid-template-columns:1fr} }
-.proto-card{
-  background:var(--paper);
-  border:1px solid var(--rule);border-radius:14px;
-  box-shadow:var(--shadow-paper);
-  overflow:hidden;transition:transform .25s, box-shadow .25s;
-}
-.proto-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-lg)}
-.proto-head{
-  padding:1.1rem 1.25rem;
-  display:flex;align-items:center;justify-content:space-between;
-  border-bottom:1px solid var(--rule);
-}
-.proto-head .proto-brand{display:flex;align-items:center;gap:.6rem}
-.proto-head .proto-brand .logo-chip{
-  width:28px;height:28px;border-radius:8px;
-  display:inline-flex;align-items:center;justify-content:center;
-  font-family:var(--serif);font-size:.8rem;font-weight:600;color:#fff;
-}
-.proto-head .proto-brand .logo-chip.openai{background:#10A37F}
-.proto-head .proto-brand .logo-chip.anthropic{background:var(--claude)}
-.proto-head h4{font-family:var(--sans);font-size:.98rem;font-weight:600;color:var(--ink)}
-.proto-head .proto-meta{font-size:.78rem;color:var(--muted);font-family:var(--mono)}
-.proto-body{
-  background:#1E1B17;padding:1.1rem 1.3rem;
-  font-family:var(--mono);font-size:.78rem;line-height:1.7;
-  color:#E8E2D4;
-  overflow-x:auto;white-space:pre;
-}
-.proto-body .c-str{color:#A8C98A}
-.proto-body .c-key{color:var(--surf)}
+/* ── Stats ── */
+.stats{background:var(--bg-alt);border-bottom:1px solid var(--rule);padding:3rem 0}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:10px;overflow:hidden}
+@media(max-width:760px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
+.stat{background:var(--paper);padding:1.8rem 1.2rem;text-align:center}
+.stat .num{font-family:var(--serif);font-size:3.2rem;line-height:1;font-weight:500;color:var(--ink);letter-spacing:-.03em}
+.stat .label{margin-top:.4rem;color:var(--muted);font-size:.84rem;font-weight:500}
+
+/* ── Dual Protocol ── */
+.proto-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-top:1.5rem}
+@media(max-width:860px){.proto-grid{grid-template-columns:1fr}}
+.proto-card{background:var(--paper);border:1px solid var(--rule);border-radius:10px;overflow:hidden;transition:transform .2s ease,box-shadow .2s ease}
+.proto-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px -8px rgba(26,22,18,.08)}
+.proto-head{padding:.9rem 1.1rem;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--rule)}
+.proto-head .proto-brand{display:flex;align-items:center;gap:.5rem}
+.proto-head .logo-chip{width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:.72rem;font-weight:600;color:#fff}
+.proto-head .logo-chip.openai{background:#10A37F}
+.proto-head .logo-chip.anthropic{background:var(--coral)}
+.proto-head h4{font-family:var(--sans);font-size:.92rem;font-weight:600}
+.proto-head .proto-meta{font-size:.74rem;color:var(--muted);font-family:var(--mono)}
+.proto-body{background:#1E1B17;padding:1rem 1.2rem;font-family:var(--mono);font-size:.76rem;line-height:1.7;color:#E8E2D4;overflow-x:auto;white-space:pre}
+.proto-body .c-str{color:#B8C99A}
+.proto-body .c-key{color:var(--sand)}
 .proto-body .c-cmd{color:#E8E2D4;font-weight:500}
 .proto-body .c-flag{color:#D4A574}
-.proto-body .c-prompt{color:var(--claude);font-weight:600}
+.proto-body .c-prompt{color:var(--coral);font-weight:600}
 .proto-body .c-com{color:#706A5C;font-style:italic}
-.proto-body .c-diff{background:rgba(0,200,180,.1);display:inline-block;width:100%;padding:0 .2rem;margin:0 -.2rem;border-left:2px solid var(--surf)}
-.proto-body .c-diff-claude{background:rgba(204,120,92,.12);border-left-color:var(--claude)}
+.note{background:var(--coral-wash);border-left:3px solid var(--coral);padding:.9rem 1.1rem;border-radius:0 6px 6px 0;margin-top:1.5rem;font-size:.88rem;color:var(--ink-soft);line-height:1.6}
+.note strong{color:var(--coral-deep)}
 
-/* ═══════════ Models ═══════════ */
-.models-section{background:var(--bg-alt);position:relative}
-.models-section::before{
-  content:"";position:absolute;inset:0;pointer-events:none;
-  background:radial-gradient(ellipse at 20% 0%, var(--claude-wash), transparent 50%);
-}
-.model-filters{
-  display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:2rem;
-  font-family:var(--sans);
-}
-.filter-btn{
-  padding:.4rem 1rem;border-radius:999px;
-  background:var(--paper);border:1px solid var(--rule);
-  font-size:.86rem;color:var(--muted);cursor:pointer;
-  transition:all .18s;font-family:inherit;font-weight:500;
-  display:inline-flex;align-items:center;gap:.4rem;
-}
+/* ── Models ── */
+.models-section{background:var(--bg-alt)}
+.model-filters{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:1.5rem}
+.filter-btn{padding:.35rem .85rem;border-radius:4px;background:var(--paper);border:1px solid var(--rule);font-size:.82rem;color:var(--muted);cursor:pointer;transition:all .15s;font-family:inherit;font-weight:500;display:inline-flex;align-items:center;gap:.3rem}
 .filter-btn:hover{color:var(--ink);border-color:var(--muted-soft)}
 .filter-btn.active{background:var(--ink);color:var(--bg);border-color:var(--ink)}
-.filter-btn .count{opacity:.6;font-size:.78rem}
+.filter-btn .count{opacity:.6;font-size:.76rem}
 .filter-btn.active .count{opacity:.85}
-
-.model-grid{
-  display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:.5rem;
-}
-.model-card{
-  background:var(--paper);border:1px solid var(--rule);border-radius:10px;
-  padding:.75rem .9rem;transition:all .18s;position:relative;overflow:hidden;
-  cursor:default;
-}
-.model-card::before{
-  content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
-  background:var(--provider-color,var(--muted-soft));
-  transition:width .18s;
-}
-.model-card:hover{border-color:var(--ink-soft);transform:translateY(-2px);box-shadow:var(--shadow)}
-.model-card:hover::before{width:5px}
+.model-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:.4rem}
+.model-card{background:var(--paper);border:1px solid var(--rule);border-radius:6px;padding:.65rem .8rem;position:relative;overflow:hidden;cursor:default;transition:border-color .2s ease,transform .2s ease,box-shadow .2s ease}
+.model-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--provider-color,var(--muted-soft));transition:width .2s ease}
+.model-card:hover{border-color:var(--muted-soft);transform:translateY(-1px);box-shadow:0 4px 12px -4px rgba(26,22,18,.06)}
+.model-card:hover::before{width:4px}
 .model-card.hide{display:none}
-.model-name{
-  font-family:var(--mono);font-size:.82rem;color:var(--ink);font-weight:500;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;
-  margin-bottom:.2rem;
-}
-.model-meta{display:flex;align-items:center;gap:.4rem;font-size:.7rem;color:var(--muted);font-family:var(--sans)}
+.model-name{font-family:var(--mono);font-size:.8rem;color:var(--ink);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;margin-bottom:.15rem}
+.model-meta{display:flex;align-items:center;gap:.35rem;font-size:.68rem;color:var(--muted);font-family:var(--sans)}
 .model-provider{font-weight:600;color:var(--provider-color,var(--muted))}
 .model-cost{margin-left:auto}
-.model-badge{
-  display:inline-block;padding:.1rem .4rem;border-radius:999px;font-size:.62rem;
-  font-weight:600;letter-spacing:.04em;text-transform:uppercase;
-  background:var(--surf-wash);color:var(--surf-deep);
-}
-.model-badge.free{background:#E5F6E0;color:#2F7D2F}
-.model-badge.thinking{background:var(--claude-wash);color:var(--claude-deep)}
-
-/* Provider accent mapping */
+.model-badge{display:inline-block;padding:.08rem .35rem;border-radius:3px;font-size:.6rem;font-weight:600;letter-spacing:.03em;text-transform:uppercase}
+.model-badge.free{background:#EBF4E6;color:#3D7A3D}
+.model-badge.thinking{background:var(--coral-wash);color:var(--coral-deep)}
 .model-card[data-provider="anthropic"]{--provider-color:#CC785C}
 .model-card[data-provider="openai"]{--provider-color:#10A37F}
 .model-card[data-provider="google"]{--provider-color:#4285F4}
@@ -389,236 +153,158 @@ nav .nav-cta:hover{background:var(--claude-deep);color:#fff;transform:translateY
 .model-card[data-provider="qwen"]{--provider-color:#A855F7}
 .model-card[data-provider="moonshot"]{--provider-color:#000}
 .model-card[data-provider="zhipu"]{--provider-color:#3B82F6}
-.model-card[data-provider="windsurf"]{--provider-color:#00C8B4}
+.model-card[data-provider="windsurf"]{--provider-color:#6B6556}
 
-/* ═══════════ Architecture ═══════════ */
-.arch-frame{
-  background:var(--paper);border:1px solid var(--rule);border-radius:20px;
-  padding:3rem 2rem;margin-top:2rem;
-  box-shadow:var(--shadow-paper);
-  position:relative;overflow:hidden;
-}
-.arch-svg{width:100%;height:auto;max-width:960px;margin:0 auto;display:block}
-.arch-svg .flow-dot{
-  animation:flow 3.5s cubic-bezier(.4,0,.6,1) infinite;
-}
-.arch-svg .flow-dot.d2{animation-delay:.7s}
-.arch-svg .flow-dot.d3{animation-delay:1.4s}
-.arch-svg .flow-dot.d4{animation-delay:2.1s}
-@keyframes flow{
-  0%{offset-distance:0%;opacity:0}
-  10%{opacity:1}
-  90%{opacity:1}
-  100%{offset-distance:100%;opacity:0}
-}
-.arch-legend{
-  display:flex;gap:1.5rem;flex-wrap:wrap;justify-content:center;
-  margin-top:2rem;font-size:.85rem;color:var(--muted);font-family:var(--sans);
-}
-.arch-legend span{display:inline-flex;align-items:center;gap:.45rem}
-.arch-legend .bullet{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+/* ── Architecture (dark immersive) ── */
+.arch-section{background:#151210;color:#E8E2D4;padding:5rem 0 4rem;position:relative;overflow:hidden}
+.arch-section::before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 50% 40%,rgba(204,120,92,.08),transparent 65%),radial-gradient(ellipse at 20% 80%,rgba(139,111,176,.04),transparent 50%);pointer-events:none}
+.arch-section .kicker{color:#CC785C;opacity:.9}
+.arch-section .section-title{color:#E8E2D4}
+.arch-section .section-title em{color:#CC785C}
+.arch-section .section-sub{color:#8C8578}
+.arch-canvas{position:relative;margin-top:2rem;min-height:520px}
+@media(max-width:860px){.arch-canvas{min-height:auto}}
+.arch-row{display:flex;align-items:center;justify-content:center;gap:0;position:relative;padding:0 1rem}
+@media(max-width:860px){.arch-row{flex-direction:column;gap:2rem}}
+.arch-nd{position:relative;text-align:center;z-index:2;flex-shrink:0}
+.arch-nd-box{border:1px solid rgba(232,226,212,.12);border-radius:16px;padding:1.4rem 1.6rem;background:rgba(30,27,23,.8);backdrop-filter:blur(8px);transition:border-color .3s,box-shadow .3s}
+.arch-nd:hover .arch-nd-box{border-color:rgba(204,120,92,.3);box-shadow:0 0 30px -10px rgba(204,120,92,.15)}
+.arch-nd-icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto .7rem;font-size:1.2rem;border:1px solid rgba(232,226,212,.1)}
+.arch-nd-label{font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:#8C8578;margin-bottom:.3rem}
+.arch-nd-title{font-family:var(--serif);font-size:1.05rem;font-weight:500;color:#E8E2D4;margin-bottom:.2rem}
+.arch-nd-sub{font-size:.75rem;color:#6B6556;line-height:1.5}
+.arch-nd.hero-node .arch-nd-box{border-color:rgba(204,120,92,.35);background:rgba(204,120,92,.06);padding:1.8rem 2rem}
+.arch-nd.hero-node .arch-nd-icon{width:56px;height:56px;border-radius:14px;background:rgba(204,120,92,.12);border-color:rgba(204,120,92,.3);font-size:1.5rem}
+.arch-nd.hero-node .arch-nd-title{font-size:1.3rem;color:#fff}
+.arch-hero-glow{position:absolute;width:280px;height:280px;top:50%;left:50%;transform:translate(-50%,-50%);border-radius:50%;background:radial-gradient(circle,rgba(204,120,92,.12) 0%,transparent 70%);animation:a-pulse 4s ease-in-out infinite;pointer-events:none;z-index:0}
+@keyframes a-pulse{0%,100%{transform:translate(-50%,-50%) scale(.9);opacity:.6}50%{transform:translate(-50%,-50%) scale(1.15);opacity:1}}
+.arch-conn{flex:1;min-width:40px;height:40px;position:relative;display:flex;align-items:center;z-index:1}
+@media(max-width:860px){.arch-conn{min-width:0;width:2px;min-height:40px;height:40px;flex:0;flex-direction:column;justify-content:center}}
+.arch-conn-line{position:absolute;top:50%;left:0;right:0;height:2px;background:linear-gradient(90deg,rgba(204,120,92,.08),rgba(204,120,92,.25),rgba(204,120,92,.08))}
+@media(max-width:860px){.arch-conn-line{top:0;bottom:0;left:50%;width:2px;height:100%;background:linear-gradient(180deg,rgba(204,120,92,.08),rgba(204,120,92,.25),rgba(204,120,92,.08))}}
+.arch-conn-dot{position:absolute;width:6px;height:6px;border-radius:50%;background:#CC785C;box-shadow:0 0 8px 2px rgba(204,120,92,.4);animation:a-flow 2.5s ease-in-out infinite}
+@media(max-width:860px){.arch-conn-dot{animation-name:a-flow-v}}
+.arch-conn:nth-of-type(2) .arch-conn-dot:not(.ret){animation-delay:.6s}
+.arch-conn:nth-of-type(3) .arch-conn-dot:not(.ret){animation-delay:1.2s}
+.arch-conn:nth-of-type(1) .arch-conn-dot.ret{animation-delay:1.5s}
+.arch-conn:nth-of-type(2) .arch-conn-dot.ret{animation-delay:.9s}
+.arch-conn:nth-of-type(3) .arch-conn-dot.ret{animation-delay:.3s}
+@keyframes a-flow{0%{left:0;opacity:0}10%{opacity:1}90%{opacity:1}100%{left:calc(100% - 6px);opacity:0}}
+@keyframes a-flow-v{0%{top:0;opacity:0}10%{opacity:1}90%{opacity:1}100%{top:calc(100% - 6px);opacity:0}}
+.arch-conn-proto{position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:.65rem;color:#6B6556;letter-spacing:.06em;white-space:nowrap;background:rgba(21,18,16,.8);padding:.1rem .5rem;border-radius:3px}
+@media(max-width:860px){.arch-conn-proto{bottom:auto;top:50%;left:calc(50% + 14px);transform:translateY(-50%) translateX(0)}}
+.arch-conn-dot.ret{background:#8B6FB0;box-shadow:0 0 8px 2px rgba(139,111,176,.4);animation:a-flow-ret 3s ease-in-out infinite}
+@keyframes a-flow-ret{0%{left:calc(100% - 6px);opacity:0}10%{opacity:1}90%{opacity:1}100%{left:0;opacity:0}}
+.arch-features{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-top:2.5rem;max-width:680px;margin-left:auto;margin-right:auto}
+@media(max-width:600px){.arch-features{grid-template-columns:repeat(2,1fr)}}
+.arch-ft{display:flex;align-items:center;gap:.5rem;padding:.6rem .8rem;border-radius:10px;border:1px solid rgba(232,226,212,.07);background:rgba(30,27,23,.5);transition:all .25s;cursor:default}
+.arch-ft:hover{border-color:rgba(204,120,92,.25);background:rgba(204,120,92,.05);transform:translateY(-1px)}
+.arch-ft-dot{width:6px;height:6px;border-radius:50%;background:#CC785C;flex-shrink:0;box-shadow:0 0 6px rgba(204,120,92,.4)}
+.arch-ft-text{font-size:.78rem;color:#A09888;font-family:var(--sans)}
+.arch-ft:hover .arch-ft-text{color:#E8E2D4}
+.arch-ft-desc{font-size:.65rem;color:#6B6556;margin-top:.1rem}
+.arch-flow-label{text-align:center;margin-top:2rem;font-size:.72rem;color:#6B6556;font-family:var(--mono);letter-spacing:.08em;display:flex;align-items:center;justify-content:center;gap:.8rem}
+.arch-flow-label .arr{display:inline-flex;align-items:center;gap:.3rem}
+.arch-flow-label .arr::before{content:"";width:24px;height:1px}
+.arch-flow-label .arr.req::before{background:linear-gradient(90deg,transparent,#CC785C)}
+.arch-flow-label .arr.res::before{background:linear-gradient(90deg,transparent,#8B6FB0)}
 
-/* ═══════════ Dashboard ═══════════ */
+/* ── Dashboard ── */
 .dashboard-section{background:var(--bg-alt)}
-.panel-grid{
-  display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.9rem;
-  margin-top:2rem;
-}
-.panel-card{
-  background:var(--paper);border:1px solid var(--rule);border-radius:12px;
-  padding:1.15rem 1.2rem;transition:all .22s;position:relative;overflow:hidden;
-  cursor:default;
-}
-.panel-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-lg);border-color:var(--claude-soft)}
-.panel-card::after{
-  content:"";position:absolute;right:-20px;top:-20px;width:80px;height:80px;
-  border-radius:50%;background:var(--claude-wash);opacity:0;transition:opacity .22s;
-}
-.panel-card:hover::after{opacity:.8}
-.panel-head{display:flex;align-items:center;gap:.55rem;margin-bottom:.55rem;position:relative;z-index:1}
-.panel-icon{
-  width:28px;height:28px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;
-  background:var(--claude-wash);color:var(--claude-deep);
-  font-family:var(--serif);font-size:.82rem;font-weight:600;flex-shrink:0;
-}
-.panel-head h4{font-family:var(--sans);font-size:.95rem;font-weight:600;color:var(--ink)}
-.panel-card p{font-size:.82rem;color:var(--muted);line-height:1.5;position:relative;z-index:1}
+.panel-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.7rem;margin-top:1.5rem}
+.panel-card{background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:1rem 1.1rem;transition:all .2s ease}
+.panel-card:hover{border-color:var(--coral-soft);transform:translateY(-2px);box-shadow:0 6px 16px -6px rgba(26,22,18,.07)}
+.panel-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem}
+.panel-icon{width:24px;height:24px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;background:var(--coral-wash);color:var(--coral-deep);font-family:var(--serif);font-size:.78rem;font-weight:600;flex-shrink:0}
+.panel-head h4{font-family:var(--sans);font-size:.9rem;font-weight:600}
+.panel-card p{font-size:.8rem;color:var(--muted);line-height:1.5}
 
-/* ═══════════ Deploy ═══════════ */
-.deploy-section{position:relative}
-.deploy-steps{
-  display:flex;flex-direction:column;gap:1.25rem;margin-top:2rem;
-  counter-reset:step;
-  position:relative;
-}
-.deploy-steps::before{
-  content:"";position:absolute;left:19px;top:40px;bottom:40px;width:2px;
-  background:linear-gradient(180deg,var(--claude),var(--surf));
-  opacity:.25;
-}
-.step{
-  display:flex;gap:1.25rem;align-items:flex-start;
-  counter-increment:step;
-  position:relative;
-}
-.step-num{
-  width:40px;height:40px;border-radius:50%;
-  background:var(--paper);border:2px solid var(--claude);color:var(--claude);
-  display:inline-flex;align-items:center;justify-content:center;
-  font-family:var(--serif);font-size:1.1rem;font-weight:500;flex-shrink:0;
-  z-index:1;
-}
+/* ── Deploy ── */
+.deploy-tabs{display:flex;gap:.3rem;margin-bottom:1.5rem;border-bottom:1px solid var(--rule);padding-bottom:-1px}
+.deploy-tab{padding:.5rem 1rem;font-size:.88rem;font-weight:500;color:var(--muted);cursor:pointer;border:none;background:none;border-bottom:2px solid transparent;transition:all .15s;font-family:var(--sans)}
+.deploy-tab:hover{color:var(--ink)}
+.deploy-tab.active{color:var(--coral);border-bottom-color:var(--coral)}
+.deploy-content{display:none}
+.deploy-content.active{display:block}
+.deploy-steps{display:flex;flex-direction:column;gap:1.2rem;counter-reset:step}
+.step{display:flex;gap:1rem;align-items:flex-start;counter-increment:step}
+.step-num{width:32px;height:32px;border-radius:50%;background:var(--coral-wash);border:1.5px solid var(--coral-soft);color:var(--coral-deep);display:inline-flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:.9rem;font-weight:500;flex-shrink:0}
 .step-num::before{content:counter(step)}
 .step-body{flex:1;min-width:0}
-.step-body h3{font-size:1.2rem;margin-bottom:.4rem;font-weight:500;font-family:var(--serif)}
-.step-body p{color:var(--muted);margin-bottom:.8rem;font-size:.95rem;font-family:var(--sans)}
-.code-box{
-  background:#1E1B17;border-radius:10px;
-  font-family:var(--mono);font-size:.8rem;
-  color:#E8E2D4;position:relative;overflow:hidden;
-  border:1px solid rgba(255,255,255,.04);
-}
-.code-box-head{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:.55rem 1rem;
-  background:rgba(255,255,255,.02);border-bottom:1px solid rgba(255,255,255,.05);
-  font-size:.72rem;color:#8C8578;
-}
-.code-box-head .lang{font-family:var(--mono)}
-.copy-btn{
-  background:transparent;border:1px solid rgba(255,255,255,.1);
-  color:#A09888;cursor:pointer;
-  padding:.2rem .55rem;border-radius:4px;
-  font-family:var(--sans);font-size:.72rem;
-  display:inline-flex;align-items:center;gap:.3rem;
-  transition:all .15s;
-}
-.copy-btn:hover{color:#E8E2D4;border-color:rgba(255,255,255,.2);background:rgba(255,255,255,.03)}
-.copy-btn.ok{color:var(--surf);border-color:rgba(0,200,180,.3)}
-.code-box pre{padding:1rem;overflow-x:auto;line-height:1.65}
-.code-box .c-str{color:#A8C98A}
+.step-body h3{font-size:1.1rem;margin-bottom:.3rem;font-weight:500}
+.step-body>p{color:var(--muted);margin-bottom:.6rem;font-size:.9rem}
+.code-box{background:#1E1B17;border-radius:8px;font-family:var(--mono);font-size:.78rem;color:#E8E2D4;overflow:hidden;border:1px solid #2A2520}
+.code-box-head{display:flex;align-items:center;justify-content:space-between;padding:.45rem .9rem;background:#242019;border-bottom:1px solid #2E2922;font-size:.7rem;color:#8C8578}
+.copy-btn{background:transparent;border:1px solid #3A352D;color:#A09888;cursor:pointer;padding:.15rem .5rem;border-radius:3px;font-family:var(--sans);font-size:.7rem;transition:all .15s}
+.copy-btn:hover{color:#E8E2D4;border-color:#5A5448}
+.copy-btn.ok{color:var(--coral);border-color:var(--coral)}
+.code-box pre{padding:.9rem 1rem;overflow-x:auto;line-height:1.65}
+.code-box .c-str{color:#B8C99A}
 .code-box .c-flag{color:#D4A574}
 .code-box .c-cmd{color:#E8E2D4;font-weight:500}
 .code-box .c-com{color:#706A5C;font-style:italic}
-.code-box .c-prompt{color:var(--claude);user-select:none}
-.code-box .c-key{color:var(--surf)}
+.code-box .c-prompt{color:var(--coral);user-select:none}
+.code-box .c-key{color:var(--sand)}
 
-/* ═══════════ Usage ═══════════ */
+/* ── Usage ── */
 .usage-section{background:var(--bg-alt)}
-.usage-grid{
-  display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.25rem;
-  margin-top:2rem;
-}
-.usage-card{
-  background:var(--paper);border:1px solid var(--rule);border-radius:14px;
-  padding:1.5rem 1.4rem;box-shadow:var(--shadow-sm);transition:all .22s;
-}
-.usage-card:hover{border-color:var(--claude-soft);transform:translateY(-3px);box-shadow:var(--shadow-lg)}
-.usage-card h4{font-family:var(--sans);font-size:1.02rem;font-weight:600;margin-bottom:.3rem;color:var(--ink);display:flex;align-items:center;gap:.5rem}
-.usage-card .logo-chip{
-  width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;
-  font-family:var(--serif);font-size:.7rem;font-weight:600;color:#fff;flex-shrink:0;
-}
-.usage-card .endpoint-tag{
-  font-family:var(--mono);font-size:.74rem;color:var(--muted);margin-bottom:.9rem;
-}
-.usage-card .endpoint-tag strong{color:var(--claude)}
-.usage-card pre{
-  background:#1E1B17;padding:.85rem 1rem;border-radius:8px;
-  font-family:var(--mono);font-size:.76rem;line-height:1.65;
-  color:#E8E2D4;overflow-x:auto;
-}
-.usage-card pre .c-str{color:#A8C98A}
-.usage-card pre .c-key{color:var(--surf)}
+.usage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-top:1.5rem}
+.usage-card{background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:1.2rem 1.1rem;transition:all .2s ease}
+.usage-card:hover{border-color:var(--coral-soft);transform:translateY(-2px);box-shadow:0 6px 16px -6px rgba(26,22,18,.07)}
+.usage-card h4{font-family:var(--sans);font-size:.95rem;font-weight:600;margin-bottom:.2rem;display:flex;align-items:center;gap:.4rem}
+.usage-card .logo-chip{width:22px;height:22px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:.65rem;font-weight:600;color:#fff;flex-shrink:0}
+.usage-card .endpoint-tag{font-family:var(--mono);font-size:.72rem;color:var(--muted);margin-bottom:.7rem}
+.usage-card .endpoint-tag strong{color:var(--coral)}
+.usage-card pre{background:#1E1B17;padding:.7rem .9rem;border-radius:6px;font-family:var(--mono);font-size:.74rem;line-height:1.6;color:#E8E2D4;overflow-x:auto}
+.usage-card pre .c-str{color:#B8C99A}
+.usage-card pre .c-key{color:var(--sand)}
 .usage-card pre .c-com{color:#706A5C;font-style:italic}
-.usage-card pre .c-flag{color:#D4A574}
 
-/* ═══════════ FAQ ═══════════ */
-.faq-list{display:flex;flex-direction:column;gap:.6rem;margin-top:2rem}
-.faq-item{
-  background:var(--paper);border:1px solid var(--rule);border-radius:10px;
-  padding:1rem 1.2rem;transition:all .18s;
-}
-.faq-item[open]{border-color:var(--claude-soft);box-shadow:var(--shadow-sm)}
-.faq-item summary{
-  cursor:pointer;list-style:none;font-family:var(--sans);
-  font-weight:500;color:var(--ink);font-size:.98rem;
-  display:flex;align-items:center;justify-content:space-between;gap:1rem;
-}
+/* ── FAQ ── */
+.faq-list{display:flex;flex-direction:column;gap:.5rem;margin-top:1.5rem}
+.faq-item{background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:.9rem 1.1rem;transition:border-color .15s}
+.faq-item[open]{border-color:var(--coral-soft)}
+.faq-item summary{cursor:pointer;list-style:none;font-weight:500;font-size:.95rem;display:flex;align-items:center;justify-content:space-between;gap:1rem}
 .faq-item summary::-webkit-details-marker{display:none}
-.faq-item summary::after{
-  content:"+";font-family:var(--serif);font-size:1.5rem;color:var(--muted);
-  transition:transform .2s;line-height:1;
-}
-.faq-item[open] summary::after{content:"−";color:var(--claude)}
-.faq-item .a{margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--rule);color:var(--muted);font-family:var(--sans);font-size:.92rem;line-height:1.65}
-.faq-item .a code{font-size:.85em}
+.faq-item summary::after{content:"+";font-family:var(--serif);font-size:1.3rem;color:var(--muted);line-height:1}
+.faq-item[open] summary::after{content:"\2212";color:var(--coral)}
+.faq-item .a{margin-top:.7rem;padding-top:.7rem;border-top:1px solid var(--rule);color:var(--muted);font-size:.9rem;line-height:1.65}
+.faq-item .a code{font-size:.84em}
 
-/* ═══════════ Footer ═══════════ */
-footer{
-  border-top:1px solid var(--rule);padding:3.5rem 0 3rem;margin-top:4rem;
-  background:var(--bg);
-}
+/* ── Footer ── */
+footer{border-top:1px solid var(--rule);padding:3rem 0 2.5rem;margin-top:2rem}
 .footer-inner{display:grid;grid-template-columns:2fr 1fr 1fr;gap:2rem}
-@media (max-width:720px){ .footer-inner{grid-template-columns:1fr} }
-.footer-brand .logo{
-  font-family:var(--serif);font-size:1.3rem;font-weight:500;display:flex;align-items:center;gap:.55rem;margin-bottom:.8rem;color:var(--ink);
-}
-.footer-brand .logo svg{width:26px;height:26px}
-.footer-brand p{color:var(--muted);font-size:.88rem;max-width:340px;font-family:var(--sans)}
-.footer-col h5{font-family:var(--sans);font-size:.82rem;font-weight:600;color:var(--ink);margin-bottom:.8rem;text-transform:uppercase;letter-spacing:.08em}
-.footer-col ul{list-style:none;display:flex;flex-direction:column;gap:.4rem}
-.footer-col a{color:var(--muted);font-size:.88rem;font-family:var(--sans)}
+@media(max-width:720px){.footer-inner{grid-template-columns:1fr}}
+.footer-brand .logo{font-family:var(--serif);font-size:1.15rem;font-weight:500;margin-bottom:.6rem;color:var(--ink)}
+.footer-brand p{color:var(--muted);font-size:.85rem;max-width:320px}
+.footer-col h5{font-size:.78rem;font-weight:600;color:var(--ink);margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.08em}
+.footer-col ul{list-style:none;display:flex;flex-direction:column;gap:.35rem}
+.footer-col a{color:var(--muted);font-size:.85rem}
 .footer-col a:hover{color:var(--ink)}
-.footer-bottom{
-  margin-top:2.5rem;padding-top:1.5rem;border-top:1px solid var(--rule);
-  display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem;
-  font-size:.82rem;color:var(--muted-soft);font-family:var(--sans);
-}
-.footer-bottom em{font-style:italic;color:var(--claude)}
+.footer-bottom{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--rule);display:flex;justify-content:space-between;flex-wrap:wrap;gap:.8rem;font-size:.78rem;color:var(--muted-soft)}
 
-/* ═══════════ Reveal anim ═══════════ */
-.reveal{opacity:0;transform:translateY(24px);transition:opacity .7s ease, transform .7s ease}
+/* ── Reveal ── */
+.reveal{opacity:0;transform:translateY(20px);transition:opacity .7s cubic-bezier(.23,1,.32,1),transform .7s cubic-bezier(.23,1,.32,1)}
 .reveal.in{opacity:1;transform:none}
-
-/* ═══════════ Reduced motion ═══════════ */
-@media (prefers-reduced-motion:reduce){
-  *,::before,::after{animation:none!important;transition:none!important}
-  .reveal{opacity:1;transform:none}
-}
-
-/* ═══════════ Note boxes ═══════════ */
-.note{
-  background:var(--claude-wash);border-left:3px solid var(--claude);
-  padding:1rem 1.25rem;border-radius:0 8px 8px 0;margin-top:1.5rem;
-  font-size:.9rem;color:var(--ink-soft);font-family:var(--sans);line-height:1.65;
-}
-.note strong{color:var(--claude-deep)}
-.note.surf{background:var(--surf-wash);border-left-color:var(--surf);}
-.note.surf strong{color:var(--surf-deep)}
+.reveal:nth-child(2){transition-delay:.08s}
+.reveal:nth-child(3){transition-delay:.16s}
+.reveal:nth-child(4){transition-delay:.24s}
+@media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none}}
 </style>
 </head>
 <body>
 
-<!-- ═══════════ Nav ═══════════ -->
+<!-- ── Nav ── -->
 <nav>
   <div class="nav-inner">
-    <a href="#" class="logo">
-      <span class="mark">
-        <svg viewBox="0 0 32 32" fill="none">
-          <path d="M3 18 Q8 11 14 18 T25 18 T29 15" stroke="#00C8B4" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-          <path d="M5 23 Q10 17 16 23 T27 23" stroke="#CC785C" stroke-width="2.5" stroke-linecap="round" fill="none" opacity=".85"/>
-        </svg>
-      </span>
-      Windsurf API
-    </a>
+    <a href="#" class="logo">Windsurf API</a>
     <div class="nav-links">
       <a href="#protocols">雙協定</a>
       <a href="#models">模型</a>
       <a href="#architecture">架構</a>
       <a href="#deploy">部署</a>
       <a href="#dashboard">管理</a>
-      <a href="#faq">常見問題</a>
+      <a href="#faq">FAQ</a>
     </div>
     <a href="https://github.com/dwgx/WindsurfAPI" class="nav-cta" target="_blank" rel="noopener">
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -627,21 +313,17 @@ footer{
   </div>
 </nav>
 
-<!-- ═══════════ Hero ═══════════ -->
+<!-- ── Hero ── -->
 <section class="hero">
-  <div class="hero-grid">
-    <div>
-      <div class="hero-eyebrow">
-        <span class="pulse"></span>
-        v1.3.0 · 雙協定已上線
-      </div>
+  <div class="container">
+    <div class="hero-inner reveal">
+      <div class="hero-badge">v1.5.0 — Docker + SOCKS5 + 工具調用修復</div>
       <h1>
         把 <em>Windsurf</em> 的 AI 模型<br>
-        變成 <span class="underline">OpenAI + Anthropic</span><br>
-        相容端點。
+        變成你熟悉的 <span class="hl">API</span>。
       </h1>
       <p class="lede">
-        無頭運行 107 個模型，用你熟悉的 <code>/v1/chat/completions</code> 或 <code>/v1/messages</code> 呼叫。Claude Code、Cursor、Cline 直接連，不用改一行客戶端代碼。
+        同時支援 <code>/v1/chat/completions</code> 與 <code>/v1/messages</code> 雙協定。Claude Code、Cursor、Cline 直接連。零 npm 依賴，Docker 一鍵部署。
       </p>
       <div class="hero-cta">
         <a href="#deploy" class="btn btn-primary">
@@ -649,51 +331,36 @@ footer{
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h8M8 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </a>
         <a href="https://github.com/dwgx/WindsurfAPI" class="btn btn-ghost" target="_blank" rel="noopener">
-          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 005.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.64 7.64 0 014 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 005.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.64 7.64 0 014 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           查看原始碼
         </a>
       </div>
       <div class="hero-meta">
-        <span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8l4 4 8-8" stroke-linecap="round" stroke-linejoin="round"/></svg>零 npm 依賴</span>
-        <span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8l4 4 8-8" stroke-linecap="round" stroke-linejoin="round"/></svg>純 Node.js &ge; 20</span>
-        <span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8l4 4 8-8" stroke-linecap="round" stroke-linejoin="round"/></svg>MIT License</span>
+        <span>零 npm 依賴</span>
+        <span>Node.js &ge; 20</span>
+        <span>MIT License</span>
+        <span>Docker 就緒</span>
       </div>
     </div>
-
-    <div class="terminal" id="hero-terminal" aria-hidden="true">
-      <div class="terminal-bar">
-        <div class="terminal-dots"><span></span><span></span><span></span></div>
-        <div class="terminal-title">you ~ <span class="tag" id="term-tag">windsurf-api</span></div>
-      </div>
-      <div class="terminal-body" id="term-body"></div>
-    </div>
-  </div>
-
-  <!-- Windsurf waves -->
-  <div class="hero-wave" aria-hidden="true">
-    <svg viewBox="0 0 1440 120" preserveAspectRatio="none">
-      <path d="M0,80 C240,40 480,100 720,70 C960,40 1200,90 1440,60 L1440,120 L0,120 Z" fill="#F3F0E6"/>
-      <path d="M0,90 C240,60 480,110 720,85 C960,60 1200,100 1440,80 L1440,120 L0,120 Z" fill="#EAF9F6" opacity=".85"/>
-    </svg>
   </div>
 </section>
 
-<!-- ═══════════ Stats ═══════════ -->
-<section class="stats" style="padding:3rem 0">
+<!-- ── Stats ── -->
+<section class="stats" style="padding:2.5rem 0">
   <div class="container">
     <div class="stats-grid">
-      <div class="stat reveal"><div class="num" data-count="107">0</div><div class="label">AI 模型</div></div>
-      <div class="stat reveal"><div class="num" data-count="9">0</div><div class="label">供應商</div></div>
-      <div class="stat reveal"><div class="num" data-count="2">0</div><div class="label">相容協定</div></div>
-      <div class="stat reveal"><div class="num" data-count="0">0</div><div class="label">npm 依賴</div></div>
+      <div class="stat reveal"><div class="num" id="stat-models">0</div><div class="label">AI 模型</div></div>
+      <div class="stat reveal"><div class="num">9</div><div class="label">供應商</div></div>
+      <div class="stat reveal"><div class="num">2</div><div class="label">相容協定</div></div>
+      <div class="stat reveal"><div class="num">0</div><div class="label">npm 依賴</div></div>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ Dual Protocol ═══════════ -->
+<!-- ── Dual Protocol ── -->
 <section class="dual-protocol" id="protocols">
   <div class="container">
-    <div class="reveal" style="max-width:700px">
+    <div class="reveal">
       <div class="kicker">雙協定 · Dual Protocol</div>
       <h2 class="section-title">同一個伺服器，<em>兩套標準</em>。</h2>
       <p class="section-sub">不管你手上的客戶端走 OpenAI 還是 Anthropic 協定，指向同一個 Windsurf API 實例就能用。</p>
@@ -702,10 +369,7 @@ footer{
     <div class="proto-grid reveal">
       <div class="proto-card">
         <div class="proto-head">
-          <div class="proto-brand">
-            <span class="logo-chip openai">S</span>
-            <h4>OpenAI 相容</h4>
-          </div>
+          <div class="proto-brand"><span class="logo-chip openai">S</span><h4>OpenAI 相容</h4></div>
           <span class="proto-meta">POST /v1/chat/completions</span>
         </div>
 <pre class="proto-body"><span class="c-prompt">$</span> <span class="c-cmd">curl</span> http://localhost:3003<span class="c-str">/v1/chat/completions</span> \
@@ -722,10 +386,7 @@ footer{
 
       <div class="proto-card">
         <div class="proto-head">
-          <div class="proto-brand">
-            <span class="logo-chip anthropic">A</span>
-            <h4>Anthropic 相容</h4>
-          </div>
+          <div class="proto-brand"><span class="logo-chip anthropic">A</span><h4>Anthropic 相容</h4></div>
           <span class="proto-meta">POST /v1/messages</span>
         </div>
 <pre class="proto-body"><span class="c-prompt">$</span> <span class="c-cmd">curl</span> http://localhost:3003<span class="c-str">/v1/messages</span> \
@@ -741,19 +402,19 @@ footer{
       </div>
     </div>
 
-    <div class="note surf reveal">
+    <div class="note reveal">
       <strong>同一個請求體格式、同一個帳號池、同一個速率限制器</strong>——切換協定只是換路由前綴。Claude Code、Cline 吃 <code>/v1/messages</code>，Cursor/OpenAI SDK 吃 <code>/v1/chat/completions</code>，互不干擾。
     </div>
   </div>
 </section>
 
-<!-- ═══════════ Models ═══════════ -->
+<!-- ── Models ── -->
 <section class="models-section" id="models">
   <div class="container">
-    <div class="reveal" style="max-width:700px">
+    <div class="reveal">
       <div class="kicker">模型 · Models</div>
-      <h2 class="section-title">一個 API 背後，<em>107 個模型</em>。</h2>
-      <p class="section-sub">從 Claude Opus 到 GPT-5、從 Gemini 3 到 DeepSeek R1，9 個供應商的模型統一接入。點標籤即時篩選。</p>
+      <h2 class="section-title">一個 API 背後，<em>多個供應商</em>。</h2>
+      <p class="section-sub">從 Claude Opus 到 GPT-5、從 Gemini 3 到 DeepSeek R1，9 個供應商的模型統一接入。</p>
     </div>
 
     <div class="model-filters reveal" id="model-filters">
@@ -780,110 +441,144 @@ footer{
   </div>
 </section>
 
-<!-- ═══════════ Architecture ═══════════ -->
-<section id="architecture">
+<!-- ── Architecture ── -->
+<section id="architecture" class="arch-section">
   <div class="container">
-    <div class="reveal" style="max-width:700px">
+    <div class="reveal">
       <div class="kicker">架構 · Architecture</div>
       <h2 class="section-title">中間多一層，<em>全都接住</em>。</h2>
-      <p class="section-sub">請求進來後經過協定翻譯、帳號池選號、語言伺服器轉 gRPC，最後到 Windsurf 雲端。速率限制、故障轉移、身份剝離在中間層完成。</p>
+      <p class="section-sub">請求從客戶端出發，經過協定翻譯、帳號池選號、工具仿真、路徑淨化，再由語言伺服器轉成 Protobuf 送到 Windsurf 雲端。回應原路返回，流式解析後交付。</p>
     </div>
 
-    <div class="arch-frame reveal">
-      <svg class="arch-svg" viewBox="0 0 960 280" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <!-- Connecting paths (invisible for offset-path) -->
-        <defs>
-          <path id="p1" d="M150 140 L300 140"/>
-          <path id="p2" d="M450 140 L600 140"/>
-          <path id="p3" d="M750 140 L870 140"/>
-          <linearGradient id="arrowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="#00C8B4" stop-opacity=".2"/>
-            <stop offset="100%" stop-color="#00C8B4" stop-opacity=".85"/>
-          </linearGradient>
-          <linearGradient id="arrowGrad2" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="#CC785C" stop-opacity=".85"/>
-            <stop offset="100%" stop-color="#CC785C" stop-opacity=".2"/>
-          </linearGradient>
-        </defs>
+    <div class="arch-canvas reveal">
+      <div class="arch-row">
+        <!-- Node 1: Client -->
+        <div class="arch-nd">
+          <div class="arch-nd-box">
+            <div class="arch-nd-icon" style="background:rgba(232,226,212,.06);color:#E8E2D4">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="14" rx="2"/><path d="M7 21h10M12 17v4"/></svg>
+            </div>
+            <div class="arch-nd-label">Client</div>
+            <div class="arch-nd-title">IDE / CLI</div>
+            <div class="arch-nd-sub">Claude Code · Cursor<br>Cline · OpenAI SDK</div>
+          </div>
+        </div>
 
-        <!-- Client box -->
-        <g>
-          <rect x="20" y="100" width="130" height="80" rx="14" fill="#FFFFFF" stroke="#E7E2D4" stroke-width="1.5"/>
-          <text x="85" y="132" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#6B6556">CLIENT</text>
-          <text x="85" y="152" text-anchor="middle" font-family="Georgia,serif" font-size="14" fill="#1A1612" font-weight="500">Claude Code</text>
-          <text x="85" y="170" text-anchor="middle" font-family="Georgia,serif" font-size="14" fill="#1A1612" font-weight="500">Cursor · Cline</text>
-        </g>
+        <!-- Connection 1 -->
+        <div class="arch-conn">
+          <div class="arch-conn-line"></div>
+          <div class="arch-conn-dot"></div>
+          <div class="arch-conn-dot ret"></div>
+          <div class="arch-conn-proto">HTTP · SSE</div>
+        </div>
 
-        <!-- WindsurfAPI box (centre, highlighted) -->
-        <g>
-          <rect x="300" y="90" width="150" height="100" rx="14" fill="#FBF1EB" stroke="#CC785C" stroke-width="2"/>
-          <text x="375" y="120" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#A05234">NODE.JS PROXY</text>
-          <text x="375" y="142" text-anchor="middle" font-family="Georgia,serif" font-size="15" fill="#1A1612" font-weight="600">Windsurf API</text>
-          <text x="375" y="160" text-anchor="middle" font-family="-apple-system,system-ui,sans-serif" font-size="10" fill="#6B6556">帳號池 · 協定翻譯</text>
-          <text x="375" y="174" text-anchor="middle" font-family="-apple-system,system-ui,sans-serif" font-size="10" fill="#6B6556">速率限制 · 重試</text>
-        </g>
+        <!-- Node 2: Windsurf API (HERO) -->
+        <div class="arch-nd hero-node">
+          <div class="arch-hero-glow"></div>
+          <div class="arch-nd-box">
+            <div class="arch-nd-icon" style="background:rgba(204,120,92,.15);color:#CC785C">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+            </div>
+            <div class="arch-nd-label">Node.js Proxy</div>
+            <div class="arch-nd-title">Windsurf API</div>
+            <div class="arch-nd-sub">協定翻譯 · 帳號池輪詢<br>工具仿真 · 上下文複用<br>速率限制 · 故障轉移</div>
+          </div>
+        </div>
 
-        <!-- LS box -->
-        <g>
-          <rect x="600" y="100" width="150" height="80" rx="14" fill="#FFFFFF" stroke="#E7E2D4" stroke-width="1.5"/>
-          <text x="675" y="132" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#6B6556">gRPC</text>
-          <text x="675" y="152" text-anchor="middle" font-family="Georgia,serif" font-size="14" fill="#1A1612" font-weight="500">Language</text>
-          <text x="675" y="170" text-anchor="middle" font-family="Georgia,serif" font-size="14" fill="#1A1612" font-weight="500">Server</text>
-        </g>
+        <!-- Connection 2 -->
+        <div class="arch-conn">
+          <div class="arch-conn-line"></div>
+          <div class="arch-conn-dot"></div>
+          <div class="arch-conn-dot ret"></div>
+          <div class="arch-conn-proto">Protobuf · gRPC</div>
+        </div>
 
-        <!-- Cloud box -->
-        <g>
-          <rect x="870" y="100" width="70" height="80" rx="14" fill="#EAF9F6" stroke="#00C8B4" stroke-width="1.5"/>
-          <text x="905" y="132" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#0B8F80">HTTPS</text>
-          <text x="905" y="152" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="#1A1612" font-weight="500">Windsurf</text>
-          <text x="905" y="170" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="#1A1612" font-weight="500">Cloud</text>
-        </g>
+        <!-- Node 3: Language Server -->
+        <div class="arch-nd">
+          <div class="arch-nd-box">
+            <div class="arch-nd-icon" style="background:rgba(232,226,212,.06);color:#A09888">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M6 14h12"/></svg>
+            </div>
+            <div class="arch-nd-label">Binary · gRPC</div>
+            <div class="arch-nd-title">Language Server</div>
+            <div class="arch-nd-sub">Windsurf LS 二進位<br>Proto 序列化 / 反序列化</div>
+          </div>
+        </div>
 
-        <!-- Connections with gradient lines -->
-        <line x1="150" y1="140" x2="300" y2="140" stroke="url(#arrowGrad)" stroke-width="2" stroke-dasharray="4 4"/>
-        <line x1="450" y1="140" x2="600" y2="140" stroke="url(#arrowGrad)" stroke-width="2" stroke-dasharray="4 4"/>
-        <line x1="750" y1="140" x2="870" y2="140" stroke="url(#arrowGrad)" stroke-width="2" stroke-dasharray="4 4"/>
-        <!-- Return -->
-        <line x1="300" y1="148" x2="150" y2="148" stroke="url(#arrowGrad2)" stroke-width="1.5" stroke-dasharray="2 4" opacity=".6"/>
+        <!-- Connection 3 -->
+        <div class="arch-conn">
+          <div class="arch-conn-line"></div>
+          <div class="arch-conn-dot"></div>
+          <div class="arch-conn-dot ret"></div>
+          <div class="arch-conn-proto">TLS · HTTPS</div>
+        </div>
 
-        <!-- Animated flow dots using offset-path -->
-        <circle class="flow-dot" r="4" fill="#00C8B4" style="offset-path:path('M150 140 L300 140');"/>
-        <circle class="flow-dot d2" r="4" fill="#00C8B4" style="offset-path:path('M450 140 L600 140');"/>
-        <circle class="flow-dot d3" r="4" fill="#00C8B4" style="offset-path:path('M750 140 L870 140');"/>
-        <!-- Return dot -->
-        <circle class="flow-dot d4" r="3" fill="#CC785C" style="offset-path:path('M870 148 L150 148');"/>
+        <!-- Node 4: Cloud -->
+        <div class="arch-nd">
+          <div class="arch-nd-box">
+            <div class="arch-nd-icon" style="background:rgba(139,111,176,.08);color:#8B6FB0">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 10a6 6 0 00-11.3-2A4.5 4.5 0 005 17h13a4 4 0 100-7z"/></svg>
+            </div>
+            <div class="arch-nd-label">Upstream</div>
+            <div class="arch-nd-title">Windsurf Cloud</div>
+            <div class="arch-nd-sub">Cascade AI 引擎<br>107+ 模型推理</div>
+          </div>
+        </div>
+      </div>
 
-        <!-- Labels over connections -->
-        <text x="225" y="130" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#A09888">HTTP</text>
-        <text x="525" y="130" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#A09888">gRPC</text>
-        <text x="810" y="130" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#A09888">TLS</text>
-      </svg>
+      <!-- Feature modules fanning out from center -->
+      <div class="arch-features reveal">
+        <div class="arch-ft">
+          <span class="arch-ft-dot"></span>
+          <div><div class="arch-ft-text">雙協定翻譯</div><div class="arch-ft-desc">OpenAI ↔ Anthropic ↔ Cascade</div></div>
+        </div>
+        <div class="arch-ft">
+          <span class="arch-ft-dot"></span>
+          <div><div class="arch-ft-text">多帳號池</div><div class="arch-ft-desc">輪詢 · 故障轉移 · 自動封禁偵測</div></div>
+        </div>
+        <div class="arch-ft">
+          <span class="arch-ft-dot"></span>
+          <div><div class="arch-ft-text">工具仿真</div><div class="arch-ft-desc">Prompt 注入 · 三格式解析</div></div>
+        </div>
+        <div class="arch-ft">
+          <span class="arch-ft-dot"></span>
+          <div><div class="arch-ft-text">上下文複用</div><div class="arch-ft-desc">Fingerprint 池 · Cascade 會話快取</div></div>
+        </div>
+        <div class="arch-ft">
+          <span class="arch-ft-dot"></span>
+          <div><div class="arch-ft-text">安全淨化</div><div class="arch-ft-desc">路徑剝離 · SSRF 防護 · Proto 截斷檢測</div></div>
+        </div>
+        <div class="arch-ft">
+          <span class="arch-ft-dot"></span>
+          <div><div class="arch-ft-text">SOCKS5 · Docker</div><div class="arch-ft-desc">每帳號獨立代理 · 容器化部署</div></div>
+        </div>
+      </div>
 
-      <div class="arch-legend">
-        <span><span class="bullet" style="background:#00C8B4"></span>請求流</span>
-        <span><span class="bullet" style="background:#CC785C"></span>SSE / 回應流</span>
-        <span><span class="bullet" style="background:#FBF1EB;border:1px solid #CC785C"></span>本專案提供的這一層</span>
+      <div class="arch-flow-label reveal">
+        <span class="arr req">請求流</span>
+        <span style="color:#4A433B">·</span>
+        <span class="arr res">回應流</span>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ Dashboard ═══════════ -->
+<!-- ── Dashboard ── -->
 <section class="dashboard-section" id="dashboard">
   <div class="container">
-    <div class="reveal" style="max-width:700px">
+    <div class="reveal">
       <div class="kicker">管理後台 · Dashboard</div>
       <h2 class="section-title">10 個面板，<em>帳號運維</em>全搞定。</h2>
-      <p class="section-sub">訪問 <code>/dashboard</code>，暗色 shadcn 風格 Web 介面。日誌即時 SSE 串流、帳號一鍵登入、模型黑白名單、封禁偵測。</p>
+      <p class="section-sub">訪問 <code>/dashboard</code>，暗色 Web 介面。日誌即時串流、帳號一鍵登入、模型黑白名單、封禁偵測。</p>
     </div>
 
     <div class="panel-grid reveal">
-      <div class="panel-card"><div class="panel-head"><div class="panel-icon">1</div><h4>總覽</h4></div><p>運行時間、帳號池狀態、分模型成功率、命中率統計</p></div>
-      <div class="panel-card"><div class="panel-head"><div class="panel-icon">2</div><h4>登入取號</h4></div><p>Email/密碼直接註冊 Windsurf 帳號，自動取得 Token</p></div>
-      <div class="panel-card"><div class="panel-head"><div class="panel-icon">3</div><h4>帳號管理</h4></div><p>新增、刪除、停用、標籤編輯、餘額 Credits 查詢</p></div>
-      <div class="panel-card"><div class="panel-head"><div class="panel-icon">4</div><h4>模型控制</h4></div><p>全域與帳號層的模型白/黑名單配置</p></div>
-      <div class="panel-card"><div class="panel-head"><div class="panel-icon">5</div><h4>代理配置</h4></div><p>全域及個別帳號出口代理 URL 配置</p></div>
-      <div class="panel-card"><div class="panel-head"><div class="panel-icon">6</div><h4>日誌檢視</h4></div><p>即時 SSE 串流，級別篩選，支援關鍵字高亮</p></div>
+      <div class="panel-card"><div class="panel-head"><div class="panel-icon">1</div><h4>總覽</h4></div><p>運行時間、帳號池狀態、分模型成功率</p></div>
+      <div class="panel-card"><div class="panel-head"><div class="panel-icon">2</div><h4>登入取號</h4></div><p>Email/密碼直接註冊，自動取得 Token</p></div>
+      <div class="panel-card"><div class="panel-head"><div class="panel-icon">3</div><h4>帳號管理</h4></div><p>新增、刪除、停用、餘額 Credits 查詢</p></div>
+      <div class="panel-card"><div class="panel-head"><div class="panel-icon">4</div><h4>模型控制</h4></div><p>全域與帳號層的模型白/黑名單</p></div>
+      <div class="panel-card"><div class="panel-head"><div class="panel-icon">5</div><h4>代理配置</h4></div><p>全域及個別帳號 HTTP/SOCKS5 代理</p></div>
+      <div class="panel-card"><div class="panel-head"><div class="panel-icon">6</div><h4>日誌檢視</h4></div><p>即時 SSE 串流，級別篩選，關鍵字高亮</p></div>
       <div class="panel-card"><div class="panel-head"><div class="panel-icon">7</div><h4>請求統計</h4></div><p>按模型/帳號維度的指標與圖表</p></div>
       <div class="panel-card"><div class="panel-head"><div class="panel-icon">8</div><h4>封禁偵測</h4></div><p>錯誤模式偵測，帳號健康自動監控</p></div>
       <div class="panel-card"><div class="panel-head"><div class="panel-icon">9</div><h4>自動更新</h4></div><p>一鍵 git pull + PM2 重啟服務</p></div>
@@ -892,145 +587,94 @@ footer{
   </div>
 </section>
 
-<!-- ═══════════ Deploy ═══════════ -->
+<!-- ── Deploy ── -->
 <section class="deploy-section" id="deploy">
   <div class="container">
-    <div class="reveal" style="max-width:700px">
+    <div class="reveal">
       <div class="kicker">部署 · Deploy</div>
       <h2 class="section-title">從零到跑起來，<em>五分鐘</em>。</h2>
-      <p class="section-sub">Linux 伺服器 · Node.js &ge; 20 · 零 npm 依賴。以下所有步驟按序執行即可。</p>
+      <p class="section-sub">兩種方式任選。</p>
     </div>
 
-    <div class="deploy-steps reveal">
-      <div class="step">
-        <div class="step-num"></div>
-        <div class="step-body">
-          <h3>安裝 Node.js 20+</h3>
-          <p>Ubuntu / Debian 的最快方式：</p>
-          <div class="code-box">
-            <div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
-<pre><span class="c-com"># NodeSource 官方源</span>
-<span class="c-prompt">$</span> <span class="c-cmd">curl</span> -fsSL https://deb.nodesource.com/setup_20.x | bash -
-<span class="c-prompt">$</span> <span class="c-cmd">apt install</span> -y nodejs
-
-<span class="c-com"># 驗證</span>
-<span class="c-prompt">$</span> <span class="c-cmd">node</span> -v   <span class="c-com"># v20.x+</span></pre>
-          </div>
-        </div>
+    <div class="reveal">
+      <div class="deploy-tabs">
+        <button class="deploy-tab active" data-tab="manual">手動部署</button>
+        <button class="deploy-tab" data-tab="docker">Docker</button>
       </div>
 
-      <div class="step">
-        <div class="step-num"></div>
-        <div class="step-body">
-          <h3>Clone 專案</h3>
-          <div class="code-box">
-            <div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
+      <div class="deploy-content active" id="tab-manual">
+        <div class="deploy-steps">
+          <div class="step"><div class="step-num"></div><div class="step-body">
+            <h3>安裝 Node.js 20+</h3>
+            <div class="code-box"><div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
+<pre><span class="c-prompt">$</span> <span class="c-cmd">curl</span> -fsSL https://deb.nodesource.com/setup_20.x | bash -
+<span class="c-prompt">$</span> <span class="c-cmd">apt install</span> -y nodejs</pre>
+            </div>
+          </div></div>
+
+          <div class="step"><div class="step-num"></div><div class="step-body">
+            <h3>Clone + 安裝 Language Server</h3>
+            <div class="code-box"><div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
 <pre><span class="c-prompt">$</span> <span class="c-cmd">git clone</span> https://github.com/dwgx/WindsurfAPI.git
-<span class="c-prompt">$</span> <span class="c-cmd">cd</span> WindsurfAPI</pre>
-          </div>
-        </div>
-      </div>
+<span class="c-prompt">$</span> <span class="c-cmd">cd</span> WindsurfAPI
+<span class="c-prompt">$</span> <span class="c-cmd">bash</span> install-ls.sh</pre>
+            </div>
+          </div></div>
 
-      <div class="step">
-        <div class="step-num"></div>
-        <div class="step-body">
-          <h3>安裝 Language Server</h3>
-          <p>倉庫自帶 <code>install-ls.sh</code>：自動下載 Exafunction release、放到 <code>/opt/windsurf/</code>、chmod 可執行。</p>
-          <div class="code-box">
-            <div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
-<pre><span class="c-com"># 一鍵安裝（自動下載最新版）</span>
-<span class="c-prompt">$</span> <span class="c-cmd">bash</span> install-ls.sh
-
-<span class="c-com"># 或指定 URL</span>
-<span class="c-prompt">$</span> <span class="c-cmd">bash</span> install-ls.sh --url <span class="c-str">https://example.com/language_server_linux_x64</span>
-
-<span class="c-com"># 或用本地已有檔案</span>
-<span class="c-prompt">$</span> <span class="c-cmd">bash</span> install-ls.sh --file ./language_server_linux_x64</pre>
-          </div>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="step-num"></div>
-        <div class="step-body">
-          <h3>設定 <code>.env</code></h3>
-          <p>複製範本後修改：</p>
-          <div class="code-box">
-            <div class="code-box-head"><span class="lang">.env</span><button class="copy-btn" data-copy>複製</button></div>
+          <div class="step"><div class="step-num"></div><div class="step-body">
+            <h3>設定 <code>.env</code></h3>
+            <div class="code-box"><div class="code-box-head"><span class="lang">.env</span><button class="copy-btn" data-copy>複製</button></div>
 <pre><span class="c-key">PORT</span>=<span class="c-str">3003</span>
 <span class="c-key">API_KEY</span>=                   <span class="c-com"># 留空 = 不驗證</span>
 <span class="c-key">DEFAULT_MODEL</span>=<span class="c-str">gpt-4o-mini</span>
-<span class="c-key">MAX_TOKENS</span>=<span class="c-str">8192</span>
-<span class="c-key">LOG_LEVEL</span>=<span class="c-str">info</span>
 <span class="c-key">LS_BINARY_PATH</span>=<span class="c-str">/opt/windsurf/language_server_linux_x64</span>
-<span class="c-key">LS_PORT</span>=<span class="c-str">42100</span>
 <span class="c-key">DASHBOARD_PASSWORD</span>=         <span class="c-com"># 留空 = 後台免密碼</span></pre>
-          </div>
-        </div>
-      </div>
+            </div>
+          </div></div>
 
-      <div class="step">
-        <div class="step-num"></div>
-        <div class="step-body">
-          <h3>啟動（PM2 守護）</h3>
-          <div class="code-box">
-            <div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
+          <div class="step"><div class="step-num"></div><div class="step-body">
+            <h3>啟動</h3>
+            <div class="code-box"><div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
 <pre><span class="c-prompt">$</span> <span class="c-cmd">npm install</span> -g pm2
 <span class="c-prompt">$</span> <span class="c-cmd">pm2 start</span> src/index.js --name windsurf-api
-<span class="c-prompt">$</span> <span class="c-cmd">pm2 save</span> <span class="c-com">&amp;&amp;</span> <span class="c-cmd">pm2 startup</span>   <span class="c-com"># 開機自啟</span></pre>
-          </div>
-          <div class="note">
-            <strong>重啟請勿用 <code>pm2 restart</code>。</strong>會留殭屍進程佔住端口。正確做法：
-            <code>pm2 stop &amp;&amp; pm2 delete &amp;&amp; fuser -k 3003/tcp &amp;&amp; pm2 start</code>——或直接跑 <code>bash update.sh</code>。
-          </div>
+<span class="c-prompt">$</span> <span class="c-cmd">pm2 save</span> && <span class="c-cmd">pm2 startup</span></pre>
+            </div>
+            <div class="note"><strong>一鍵更新：</strong><code>bash update.sh</code></div>
+          </div></div>
         </div>
       </div>
 
-      <div class="step">
-        <div class="step-num"></div>
-        <div class="step-body">
-          <h3>新增帳號</h3>
-          <p>從 Windsurf 編輯器取得 token 後：</p>
-          <div class="code-box">
-            <div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
-<pre><span class="c-com"># 單個</span>
-<span class="c-prompt">$</span> <span class="c-cmd">curl</span> -X POST http://localhost:3003/auth/login \
-    -H <span class="c-str">"Content-Type: application/json"</span> \
-    -d <span class="c-str">'{"token":"your-windsurf-token"}'</span>
+      <div class="deploy-content" id="tab-docker">
+        <div class="deploy-steps">
+          <div class="step"><div class="step-num"></div><div class="step-body">
+            <h3>準備配置</h3>
+            <div class="code-box"><div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
+<pre><span class="c-prompt">$</span> <span class="c-cmd">git clone</span> https://github.com/dwgx/WindsurfAPI.git
+<span class="c-prompt">$</span> <span class="c-cmd">cd</span> WindsurfAPI
+<span class="c-prompt">$</span> <span class="c-cmd">cp</span> .env.example .env</pre>
+            </div>
+          </div></div>
 
-<span class="c-com"># 批次</span>
-<span class="c-prompt">$</span> <span class="c-cmd">curl</span> -X POST http://localhost:3003/auth/login \
-    -H <span class="c-str">"Content-Type: application/json"</span> \
-    -d <span class="c-str">'{"accounts":[{"token":"t1"},{"token":"t2"}]}'</span></pre>
-          </div>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="step-num"></div>
-        <div class="step-body">
-          <h3>驗證</h3>
-          <div class="code-box">
-            <div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
-<pre><span class="c-prompt">$</span> <span class="c-cmd">curl</span> http://localhost:3003/health
-
-<span class="c-prompt">$</span> <span class="c-cmd">curl</span> http://localhost:3003/v1/chat/completions \
-    -H <span class="c-str">"Content-Type: application/json"</span> \
-    -d <span class="c-str">'{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'</span>
-
-<span class="c-com"># 瀏覽器開啟管理後台</span>
-<span class="c-com"># http://YOUR_IP:3003/dashboard</span></pre>
-          </div>
+          <div class="step"><div class="step-num"></div><div class="step-body">
+            <h3>啟動容器</h3>
+            <div class="code-box"><div class="code-box-head"><span class="lang">bash</span><button class="copy-btn" data-copy>複製</button></div>
+<pre><span class="c-prompt">$</span> <span class="c-cmd">docker compose</span> up -d --build
+<span class="c-prompt">$</span> <span class="c-cmd">docker compose</span> logs -f</pre>
+            </div>
+            <div class="note">
+              <strong>預設掛載：</strong><code>.docker-data/data</code> 持久化帳號/配置，<code>.docker-data/opt/windsurf</code> 放 LS binary。容器首次啟動會自動下載。
+            </div>
+          </div></div>
         </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ Usage ═══════════ -->
+<!-- ── Usage ── -->
 <section class="usage-section">
   <div class="container">
-    <div class="reveal" style="max-width:700px">
+    <div class="reveal">
       <div class="kicker">客戶端接入 · Integrations</div>
       <h2 class="section-title">你常用的那個 IDE，<em>已經兼容了</em>。</h2>
       <p class="section-sub">改 BASE_URL，塞 API KEY，完事。</p>
@@ -1044,7 +688,6 @@ footer{
 <span class="c-key">export</span> ANTHROPIC_API_KEY=<span class="c-str">"sk-ws-your-key"</span>
 claude</pre>
       </div>
-
       <div class="usage-card">
         <h4><span class="logo-chip" style="background:#3B82F6">C</span>Cursor</h4>
         <p class="endpoint-tag">→ <strong>/v1/chat/completions</strong> · OpenAI 協定</p>
@@ -1053,7 +696,6 @@ Base URL: <span class="c-str">http://YOUR_IP:3003/v1</span>
 API Key:  <span class="c-str">sk-ws-your-key</span>
 Model:    <span class="c-str">claude-opus-4.6</span></pre>
       </div>
-
       <div class="usage-card">
         <h4><span class="logo-chip" style="background:#8B6FB0">C</span>Cline / Roo Code</h4>
         <p class="endpoint-tag">→ <strong>Anthropic</strong> 或 <strong>OpenAI</strong> provider 皆可</p>
@@ -1061,7 +703,6 @@ Model:    <span class="c-str">claude-opus-4.6</span></pre>
 Base URL: <span class="c-str">http://YOUR_IP:3003/v1</span>
 API Key:  <span class="c-str">sk-ws-your-key</span></pre>
       </div>
-
       <div class="usage-card">
         <h4><span class="logo-chip" style="background:#10A37F">O</span>OpenAI SDK</h4>
         <p class="endpoint-tag">→ <strong>/v1/chat/completions</strong></p>
@@ -1075,7 +716,7 @@ client = OpenAI(
   </div>
 </section>
 
-<!-- ═══════════ FAQ ═══════════ -->
+<!-- ── FAQ ── -->
 <section id="faq">
   <div class="narrow">
     <div class="reveal">
@@ -1095,42 +736,36 @@ client = OpenAI(
       <details class="faq-item">
         <summary>看不到最新模型（opus-4.7、gpt-5.3 之類）怎麼辦？</summary>
         <div class="a">Exafunction 公開 release 停在 v2.12.5（2026-01），不含 4.7。從 Windsurf 桌面端 App 裡把 LS binary 拷出來即可：<br>
-        • macOS：<code>~/Library/Application Support/Windsurf/resources/app/extensions/windsurf/bin/language_server_macos_arm</code><br>
-        • Linux：<code>~/.windsurf/bin/language_server_linux_x64</code><br>
+        &bull; macOS：<code>~/Library/Application Support/Windsurf/.../language_server_macos_arm</code><br>
+        &bull; Linux：<code>~/.windsurf/bin/language_server_linux_x64</code><br>
         拷過去後 <code>/v1/models</code> 會自動從雲端 discover 最新目錄。</div>
       </details>
       <details class="faq-item">
         <summary>帳號會被封嗎？</summary>
-        <div class="a">Cascade 流量型態與桌面端不一樣，高頻 burst 確實容易被識別。後台的封禁偵測面板會監控錯誤率，並按 5 分鐘窗口做速率冷卻。推薦：每帳號 RPM 控制在 10 以下、配不同出口代理、混用思考型和普通模型。</div>
+        <div class="a">高頻 burst 確實容易被識別。後台的封禁偵測面板會監控錯誤率，按 5 分鐘窗口做速率冷卻。推薦：每帳號 RPM &lt; 10、配不同出口代理（支援 SOCKS5）、混用思考型和普通模型。</div>
       </details>
       <details class="faq-item">
-        <summary>和 pqhaz3925/AlexStrNik 那些專案的區別？</summary>
+        <summary>和其他類似專案的區別？</summary>
         <div class="a">三點核心差異：<br>
-        (1) <strong>雙協定</strong>——那些是 OpenAI only，本專案同時有 <code>/v1/messages</code>。<br>
-        (2) <strong>planner_mode=NO_TOOL</strong>——關掉 Cascade 內建工具循環，消除 20% stall warm 假陽性和路徑洩露。<br>
-        (3) <strong>完整管理後台 + 帳號池</strong>——不是單號代理，是多號輪詢 + 故障轉移。</div>
+        (1) <strong>雙協定</strong>——同時有 <code>/v1/messages</code> 和 <code>/v1/chat/completions</code>。<br>
+        (2) <strong>planner_mode=NO_TOOL</strong>——關掉 Cascade 內建工具循環，消除路徑洩露。<br>
+        (3) <strong>完整管理後台 + 帳號池</strong>——多號輪詢 + 故障轉移 + Docker 一鍵部署。</div>
       </details>
       <details class="faq-item">
-        <summary>是 MIT License 嗎可以商用嗎？</summary>
-        <div class="a">代碼本體 MIT License，法律上允許商用。README 顶上有一段作者態度：沒給 Star 和 Follow 的請別商業轉售，點了的隨便用。請自行判斷要不要尊重這個態度。</div>
+        <summary>MIT License，可以商用嗎？</summary>
+        <div class="a">代碼本體 MIT License，法律上允許商用。README 顶上有一段作者態度：沒給 Star 和 Follow 的請別商業轉售，點了的隨便用。</div>
       </details>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ Footer ═══════════ -->
+<!-- ── Footer ── -->
 <footer>
   <div class="container">
     <div class="footer-inner">
       <div class="footer-brand">
-        <div class="logo">
-          <svg viewBox="0 0 32 32" fill="none">
-            <path d="M3 18 Q8 11 14 18 T25 18 T29 15" stroke="#00C8B4" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-            <path d="M5 23 Q10 17 16 23 T27 23" stroke="#CC785C" stroke-width="2.5" stroke-linecap="round" fill="none" opacity=".85"/>
-          </svg>
-          Windsurf API
-        </div>
-        <p>Windsurf 反向代理工具 · 純 Node.js 零 npm 依賴 · MIT License · 作者 <a href="https://github.com/dwgx" target="_blank" rel="noopener">@dwgx</a></p>
+        <div class="logo">Windsurf API</div>
+        <p>Windsurf 反向代理 · 純 Node.js 零依賴 · MIT License · <a href="https://github.com/dwgx" target="_blank" rel="noopener">@dwgx</a></p>
       </div>
       <div class="footer-col">
         <h5>專案</h5>
@@ -1151,164 +786,16 @@ client = OpenAI(
       </div>
     </div>
     <div class="footer-bottom">
-      <span>視覺靈感致敬 <em>Anthropic Claude</em> 與 <em>Windsurf</em> · 本頁無廣告、無追蹤、無外部依賴</span>
-      <span>© 2026 dwgx</span>
+      <span>Contributors: <a href="https://github.com/dd373156">@dd373156</a> · <a href="https://github.com/colin1112a">@colin1112a</a> · <a href="https://github.com/motto1">@motto1</a> · <a href="https://github.com/youfak">@youfak</a></span>
+      <span>&copy; 2026 dwgx</span>
     </div>
   </div>
 </footer>
 
 <script>
-/* ═══════════ Terminal typewriter ═══════════ */
-(function(){
-  const body = document.getElementById('term-body');
-  const tag = document.getElementById('term-tag');
-  if(!body) return;
-
-  const scenes = [
-    {
-      model: 'claude-opus-4.6',
-      lines: [
-        { t:'cmd',  s:'<span class="term-prompt">$</span> curl -sN localhost:3003<span class="term-str">/v1/messages</span> \\' },
-        { t:'cmd',  s:'    <span class="term-flag">-H</span> <span class="term-str">"x-api-key: sk-ws-***"</span> \\' },
-        { t:'cmd',  s:'    <span class="term-flag">-d</span> <span class="term-str">\'{"model":"<span class="term-key">claude-opus-4.6</span>","messages":[{"role":"user","content":"你好"}],"stream":true}\'</span>' },
-        { t:'gap' },
-        { t:'res', s:'<span class="term-meta">event: message_start</span>' },
-        { t:'res', s:'<span class="term-meta">event: content_block_delta</span>' },
-        { t:'stream', s:'你好！很高兴见到你。' },
-        { t:'stream', s:'我是 Claude，Anthropic 开发的 AI 助手。' },
-        { t:'stream', s:'有什么可以帮你的吗？' },
-        { t:'res', s:'<span class="term-meta">event: message_stop</span>' },
-      ]
-    },
-    {
-      model: 'gpt-5.2',
-      lines: [
-        { t:'cmd',  s:'<span class="term-prompt">$</span> curl -sN localhost:3003<span class="term-str">/v1/chat/completions</span> \\' },
-        { t:'cmd',  s:'    <span class="term-flag">-H</span> <span class="term-str">"Authorization: Bearer sk-ws-***"</span> \\' },
-        { t:'cmd',  s:'    <span class="term-flag">-d</span> <span class="term-str">\'{"model":"<span class="term-key">gpt-5.2</span>","messages":[{"role":"user","content":"寫一個快排"}],"stream":true}\'</span>' },
-        { t:'gap' },
-        { t:'stream', s:'def quicksort(arr):' },
-        { t:'stream', s:'    if len(arr) &lt;= 1:' },
-        { t:'stream', s:'        return arr' },
-        { t:'stream', s:'    pivot = arr[len(arr)//2]' },
-        { t:'stream', s:'    return (quicksort([x for x in arr if x &lt; pivot]) +' },
-        { t:'stream', s:'            [x for x in arr if x == pivot] +' },
-        { t:'stream', s:'            quicksort([x for x in arr if x &gt; pivot]))' },
-      ]
-    },
-    {
-      model: 'gemini-3.0-pro',
-      lines: [
-        { t:'cmd',  s:'<span class="term-prompt">$</span> curl localhost:3003<span class="term-str">/v1/chat/completions</span> \\' },
-        { t:'cmd',  s:'    <span class="term-flag">-d</span> <span class="term-str">\'{"model":"<span class="term-key">gemini-3.0-pro</span>","messages":[{"role":"user","content":"解釋什麼是 SSE"}]}\'</span>' },
-        { t:'gap' },
-        { t:'stream', s:'Server-Sent Events 是 HTTP 上的' },
-        { t:'stream', s:'單向推送協定：客戶端發一次請求，' },
-        { t:'stream', s:'伺服器回 text/event-stream，每筆' },
-        { t:'stream', s:'以 "data: ...\\n\\n" 分隔。LLM API 的' },
-        { t:'stream', s:'流式輸出普遍用 SSE。' },
-      ]
-    },
-    {
-      model: 'kimi-k2',
-      lines: [
-        { t:'cmd',  s:'<span class="term-prompt">$</span> curl localhost:3003<span class="term-str">/v1/chat/completions</span> \\' },
-        { t:'cmd',  s:'    <span class="term-flag">-d</span> <span class="term-str">\'{"model":"<span class="term-key">kimi-k2</span>","messages":[{"role":"user","content":"hi"}]}\'</span>' },
-        { t:'gap' },
-        { t:'stream', s:'你好呀！我是 Kimi，很高兴' },
-        { t:'stream', s:'为你服务。需要我帮你做点什么？' },
-      ]
-    },
-  ];
-
-  let sceneIdx = 0;
-
-  function typeText(el, text, speed){
-    return new Promise(resolve => {
-      let i = 0;
-      const step = () => {
-        if(i >= text.length){ resolve(); return; }
-        el.innerHTML = text.slice(0,++i);
-        setTimeout(step, speed);
-      };
-      step();
-    });
-  }
-
-  function appendHTML(html){
-    const div = document.createElement('div');
-    div.className = 'term-line';
-    div.innerHTML = html;
-    body.appendChild(div);
-    body.scrollTop = body.scrollHeight;
-    return div;
-  }
-
-  async function playScene(scene){
-    tag.textContent = scene.model;
-    body.innerHTML = '';
-    for(const line of scene.lines){
-      if(line.t === 'gap'){
-        appendHTML('&nbsp;');
-        await new Promise(r => setTimeout(r, 220));
-        continue;
-      }
-      const el = appendHTML('');
-      const speed = line.t === 'cmd' ? 8 : line.t === 'stream' ? 14 : 4;
-      // For rich HTML we cannot type char-by-char; fake it by typing visible text then swap in HTML
-      if(line.t === 'cmd' || line.t === 'res'){
-        el.innerHTML = line.s;
-        await new Promise(r => setTimeout(r, 120));
-      } else {
-        await typeText(el, line.s, speed);
-      }
-      body.scrollTop = body.scrollHeight;
-    }
-    // caret
-    const caret = document.createElement('span');
-    caret.className = 'term-caret';
-    const last = body.lastElementChild;
-    if(last) last.appendChild(caret);
-    await new Promise(r => setTimeout(r, 2800));
-  }
-
-  async function loop(){
-    while(true){
-      await playScene(scenes[sceneIdx]);
-      sceneIdx = (sceneIdx + 1) % scenes.length;
-    }
-  }
-  loop();
-})();
-
-/* ═══════════ Stats count-up ═══════════ */
-(function(){
-  const nodes = document.querySelectorAll('.stat .num');
-  const seen = new WeakSet();
-  function animate(el){
-    if(seen.has(el)) return;
-    seen.add(el);
-    const target = +el.dataset.count;
-    if(target === 0){ el.textContent = '0'; return; }
-    const dur = 1400, start = performance.now();
-    const tick = now => {
-      const t = Math.min(1, (now - start) / dur);
-      const eased = 1 - Math.pow(1 - t, 3);
-      el.textContent = Math.round(target * eased).toLocaleString();
-      if(t < 1) requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  }
-  const io = new IntersectionObserver(entries => {
-    entries.forEach(e => { if(e.isIntersecting) animate(e.target); });
-  }, { threshold:.3 });
-  nodes.forEach(n => io.observe(n));
-})();
-
-/* ═══════════ Model matrix ═══════════ */
+/* ── Models ── */
 (function(){
   const MODELS = [
-    // Anthropic
     {k:'claude-3.5-sonnet',p:'anthropic',c:2},
     {k:'claude-3.7-sonnet',p:'anthropic',c:2},
     {k:'claude-3.7-sonnet-thinking',p:'anthropic',c:3,thinking:1},
@@ -1330,8 +817,6 @@ client = OpenAI(
     {k:'claude-opus-4.6',p:'anthropic',c:6},
     {k:'claude-opus-4.6-thinking',p:'anthropic',c:8,thinking:1},
     {k:'claude-code',p:'anthropic',c:2},
-
-    // OpenAI GPT
     {k:'gpt-4o',p:'openai',c:1},
     {k:'gpt-4o-mini',p:'openai',c:0.5,free:1},
     {k:'gpt-4.1',p:'openai',c:1},
@@ -1362,49 +847,33 @@ client = OpenAI(
     {k:'o3-mini',p:'openai',c:2,thinking:1},
     {k:'o3-pro',p:'openai',c:10,thinking:1},
     {k:'o4-mini',p:'openai',c:2,thinking:1},
-
-    // Gemini
     {k:'gemini-2.5-pro',p:'google',c:2},
     {k:'gemini-2.5-flash',p:'google',c:0.25,free:1},
     {k:'gemini-2.5-flash-thinking',p:'google',c:0.5,thinking:1},
     {k:'gemini-3.0-pro',p:'google',c:4,thinking:1},
     {k:'gemini-3.0-flash',p:'google',c:1},
     {k:'gemini-3-pro-preview',p:'google',c:4},
-
-    // DeepSeek
     {k:'deepseek-v3',p:'deepseek',c:0.5},
     {k:'deepseek-v3.1',p:'deepseek',c:0.5},
     {k:'deepseek-v3.2',p:'deepseek',c:0.5},
     {k:'deepseek-r1',p:'deepseek',c:1,thinking:1},
     {k:'deepseek-r1-0528',p:'deepseek',c:1,thinking:1},
-
-    // xAI Grok
     {k:'grok-3',p:'xai',c:1},
     {k:'grok-3-mini',p:'xai',c:0.5},
     {k:'grok-4',p:'xai',c:2,thinking:1},
     {k:'grok-4-fast',p:'xai',c:1},
     {k:'grok-code-fast',p:'xai',c:1},
-
-    // Qwen
     {k:'qwen-3-235b',p:'qwen',c:0.5},
     {k:'qwen-3-coder',p:'qwen',c:1},
     {k:'qwen-3-coder-fast',p:'qwen',c:1},
     {k:'qwen3-max',p:'qwen',c:1},
-
-    // Moonshot Kimi
     {k:'kimi-k2',p:'moonshot',c:1},
     {k:'kimi-k2-0905',p:'moonshot',c:1},
     {k:'kimi-k2-thinking',p:'moonshot',c:2,thinking:1},
-
-    // Zhipu GLM
     {k:'glm-4.5',p:'zhipu',c:0.5},
     {k:'glm-4.6',p:'zhipu',c:1},
     {k:'glm-4.6-thinking',p:'zhipu',c:1,thinking:1},
-
-    // Minimax (kept under zhipu color bucket for brevity)
     {k:'minimax-m2',p:'zhipu',c:1},
-
-    // Windsurf SWE
     {k:'swe-1',p:'windsurf',c:0.5},
     {k:'swe-1-lite',p:'windsurf',c:0.25},
     {k:'swe-1.5',p:'windsurf',c:0.5},
@@ -1412,6 +881,7 @@ client = OpenAI(
 
   const grid = document.getElementById('model-grid');
   if(!grid) return;
+  const providerShort = {anthropic:'Claude',openai:'GPT',google:'Gemini',deepseek:'DeepSeek',xai:'Grok',qwen:'Qwen',moonshot:'Kimi',zhipu:'GLM',windsurf:'SWE'};
 
   function badge(m){
     if(m.free) return '<span class="model-badge free">免費</span>';
@@ -1419,78 +889,66 @@ client = OpenAI(
     return '';
   }
 
-  const providerShort = {
-    anthropic:'Claude', openai:'GPT', google:'Gemini',
-    deepseek:'DeepSeek', xai:'Grok', qwen:'Qwen',
-    moonshot:'Kimi', zhipu:'GLM', windsurf:'SWE'
-  };
-
   MODELS.forEach(m => {
     const el = document.createElement('div');
     el.className = 'model-card';
     el.dataset.provider = m.p;
     if(m.thinking) el.dataset.thinking = '1';
     if(m.free) el.dataset.free = '1';
-    el.innerHTML =
-      '<span class="model-name" title="'+m.k+'">'+m.k+'</span>'+
-      '<div class="model-meta">'+
-        '<span class="model-provider">'+providerShort[m.p]+'</span>'+
-        (badge(m) ? '<span style="margin-left:.2rem">'+badge(m)+'</span>' : '')+
-        '<span class="model-cost" title="Credit 倍率">×'+m.c+'</span>'+
-      '</div>';
+    el.innerHTML = '<span class="model-name" title="'+m.k+'">'+m.k+'</span><div class="model-meta"><span class="model-provider">'+providerShort[m.p]+'</span>'+(badge(m)?'<span style="margin-left:.15rem">'+badge(m)+'</span>':'')+'<span class="model-cost">&times;'+m.c+'</span></div>';
     grid.appendChild(el);
   });
 
-  // Counts
-  const totalCount = MODELS.length;
-  document.getElementById('count-all').textContent = totalCount;
+  document.getElementById('stat-models').textContent = MODELS.length;
+  document.getElementById('count-all').textContent = MODELS.length;
   document.getElementById('count-anthropic').textContent = MODELS.filter(m=>m.p==='anthropic').length;
   document.getElementById('count-openai').textContent = MODELS.filter(m=>m.p==='openai').length;
   document.getElementById('count-google').textContent = MODELS.filter(m=>m.p==='google').length;
   document.getElementById('count-thinking').textContent = MODELS.filter(m=>m.thinking).length;
   document.getElementById('count-free').textContent = MODELS.filter(m=>m.free).length;
 
-  const btns = document.querySelectorAll('.filter-btn');
-  btns.forEach(b => b.addEventListener('click', () => {
-    btns.forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.filter-btn').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     const f = b.dataset.filter;
     grid.querySelectorAll('.model-card').forEach(card => {
-      let show = false;
-      if(f === 'all') show = true;
-      else if(f === 'thinking') show = card.dataset.thinking === '1';
-      else if(f === 'free') show = card.dataset.free === '1';
-      else show = card.dataset.provider === f;
-      card.classList.toggle('hide', !show);
+      let show = f==='all' || (f==='thinking'?card.dataset.thinking==='1':f==='free'?card.dataset.free==='1':card.dataset.provider===f);
+      card.classList.toggle('hide',!show);
     });
   }));
 })();
 
-/* ═══════════ Copy buttons ═══════════ */
+/* ── Deploy tabs ── */
 (function(){
-  document.querySelectorAll('[data-copy]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const pre = btn.closest('.code-box').querySelector('pre');
-      const text = pre.innerText;
-      try{
-        await navigator.clipboard.writeText(text);
-        btn.textContent = '已複製';
-        btn.classList.add('ok');
-        setTimeout(() => { btn.textContent = '複製'; btn.classList.remove('ok'); }, 1400);
-      }catch(e){
-        btn.textContent = '複製失敗';
-      }
+  document.querySelectorAll('.deploy-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.deploy-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.deploy-content').forEach(c => c.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('tab-'+tab.dataset.tab).classList.add('active');
     });
   });
 })();
 
-/* ═══════════ Reveal on scroll ═══════════ */
+/* ── Copy ── */
+(function(){
+  document.querySelectorAll('[data-copy]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const pre = btn.closest('.code-box').querySelector('pre');
+      try{
+        await navigator.clipboard.writeText(pre.innerText);
+        btn.textContent='已複製';btn.classList.add('ok');
+        setTimeout(()=>{btn.textContent='複製';btn.classList.remove('ok')},1400);
+      }catch{btn.textContent='失敗'}
+    });
+  });
+})();
+
+/* ── Reveal ── */
 (function(){
   const io = new IntersectionObserver(entries => {
-    entries.forEach(e => {
-      if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); }
-    });
-  }, { threshold:.15, rootMargin:'0px 0px -50px 0px' });
+    entries.forEach(e => { if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)} });
+  },{threshold:.12,rootMargin:'0px 0px -40px 0px'});
   document.querySelectorAll('.reveal').forEach(el => io.observe(el));
 })();
 </script>

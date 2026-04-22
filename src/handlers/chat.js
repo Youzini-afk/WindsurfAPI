@@ -205,13 +205,13 @@ export async function handleChatCompletions(body) {
   const hasTools = Array.isArray(tools) && tools.length > 0;
   const hasToolHistory = Array.isArray(messages) && messages.some(m => m?.role === 'tool' || (m?.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length));
   const emulateTools = useCascade && (hasTools || hasToolHistory);
-  // Build proto-level preamble (goes into tool_calling_section override);
-  // pass empty tools to normalizeMessagesForCascade so it only rewrites
-  // role:tool / assistant.tool_calls messages without injecting a user-level
-  // preamble (that's now handled at the proto layer).
+  // Build proto-level preamble (goes into tool_calling_section override).
+  // Also inject into the last user message as fallback — some models in
+  // NO_TOOL mode ignore the SectionOverride entirely and refuse to call
+  // tools unless they see the definitions in the conversation itself. (#22)
   const toolPreamble = emulateTools ? buildToolPreambleForProto(tools || [], tool_choice) : '';
   let cascadeMessages = emulateTools
-    ? normalizeMessagesForCascade(messages, [])
+    ? normalizeMessagesForCascade(messages, tools)
     : [...messages];
 
   // ── Model identity prompt injection ──
@@ -291,11 +291,8 @@ export async function handleChatCompletions(body) {
   // instead of replaying the whole history.
   //
   // Conversation reuse lets Cascade keep server-side context across turns.
-  // Previously disabled for tool-emulation but that caused ALL Claude Code
-  // conversations to lose context after every turn (#24). A fingerprint miss
-  // just falls back to fresh cascade (no worse than before). (#24)
   const reuseEnabled = useCascade && isExperimentalEnabled('cascadeConversationReuse');
-  const fpBefore = reuseEnabled ? fingerprintBefore(messages) : null;
+  const fpBefore = reuseEnabled ? fingerprintBefore(messages, modelKey) : null;
   let reuseEntry = reuseEnabled ? poolCheckout(fpBefore) : null;
   if (reuseEntry) log.info(`Chat: cascade reuse HIT cascadeId=${reuseEntry.cascadeId.slice(0, 8)}… model=${displayModel}`);
 
@@ -331,10 +328,17 @@ export async function handleChatCompletions(body) {
       let acct = null;
       if (reuseEntry && attempt === 0) {
         // First attempt pins to the account that owns the cached cascade.
+        // If it's temporarily busy, wait up to 5s before giving up on reuse.
         acct = acquireAccountByKey(reuseEntry.apiKey, modelKey);
         if (!acct) {
-          log.info('Chat: cascade reuse skipped — owning account not available, falling back to fresh cascade');
-          reuseEntry = null;
+          for (let w = 0; w < 10 && !acct; w++) {
+            await new Promise(r => setTimeout(r, 500));
+            acct = acquireAccountByKey(reuseEntry.apiKey, modelKey);
+          }
+          if (!acct) {
+            log.info('Chat: cascade reuse skipped — owning account not available after 5s wait');
+            reuseEntry = null;
+          }
         }
       }
       if (!acct) {
@@ -478,7 +482,7 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
     // Check the cascade back into the pool under the *post-turn* fingerprint
     // so the next request in the same conversation can resume it.
     if (poolCtx && cascadeMeta?.cascadeId && allText) {
-      const fpAfter = fingerprintAfter(messages);
+      const fpAfter = fingerprintAfter(messages, modelKey);
       poolCheckin(fpAfter, {
         cascadeId: cascadeMeta.cascadeId,
         sessionId: cascadeMeta.sessionId,
@@ -691,14 +695,13 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
       let accThinking = '';
 
       // Conversation reuse lets Cascade keep server-side context across turns.
-      // A fingerprint miss just falls back to a fresh cascade, so enabling it
-      // for tool-emulation is still a net win versus always losing context.
+      // Include modelKey in the fingerprint so cross-model turns never collide.
       const reuseEnabled = useCascade && isExperimentalEnabled('cascadeConversationReuse');
-      const fpBefore = reuseEnabled ? fingerprintBefore(messages) : null;
+      const fpBefore = reuseEnabled ? fingerprintBefore(messages, modelKey) : null;
       let reuseEntry = reuseEnabled ? poolCheckout(fpBefore) : null;
       if (reuseEntry) log.info(`Chat: cascade reuse HIT cascadeId=${reuseEntry.cascadeId.slice(0, 8)}… stream model=${model}`);
 
-      // Always strip  tool_result blocks in Cascade mode.
+      // Always strip <tool_result> blocks in Cascade mode.
       // In emulation mode, parsed calls are emitted as OpenAI tool_calls.
       // In non-emulation mode, blocks are silently stripped (defense-in-depth
       // against Cascade's system prompt inducing tool markup).
@@ -794,8 +797,14 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
           if (reuseEntry && attempt === 0) {
             acct = acquireAccountByKey(reuseEntry.apiKey, modelKey);
             if (!acct) {
-              log.info('Chat: cascade reuse skipped — owning account not available');
-              reuseEntry = null;
+              for (let w = 0; w < 10 && !acct && !abortController.signal.aborted; w++) {
+                await new Promise(r => setTimeout(r, 500));
+                acct = acquireAccountByKey(reuseEntry.apiKey, modelKey);
+              }
+              if (!acct) {
+                log.info('Chat: cascade reuse skipped — owning account not available after 5s wait');
+                reuseEntry = null;
+              }
             }
           }
           if (!acct) {
@@ -874,7 +883,7 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
             emitThinking(pathStreamThinking.flush());
             // Pool check-in on success (cascade only)
             if (reuseEnabled && cascadeResult?.cascadeId && accText) {
-              const fpAfter = fingerprintAfter(messages);
+              const fpAfter = fingerprintAfter(messages, modelKey);
               poolCheckin(fpAfter, {
                 cascadeId: cascadeResult.cascadeId,
                 sessionId: cascadeResult.sessionId,

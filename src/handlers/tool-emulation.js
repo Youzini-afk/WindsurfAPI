@@ -249,6 +249,11 @@ export class ToolCallStreamParser {
   }
 
   _consumeJsonBlock(parseFn, doneCalls, safeParts) {
+    if (this.buffer.length > 65_536) {
+      safeParts.push(this.buffer);
+      this.buffer = '';
+      return true;
+    }
     const endIdx = this._findClosingBrace();
     if (endIdx === -1) return false;
     const jsonStr = this.buffer.slice(0, endIdx + 1);
@@ -426,14 +431,24 @@ export class ToolCallStreamParser {
     }
     if (this.inToolCode) {
       this.inToolCode = false;
-      const tc = this._parseToolCodeJson(remaining);
-      if (tc) { this._totalSeen++; return { text: '', toolCalls: [tc] }; }
+      const endIdx = this._findClosingBrace();
+      if (endIdx !== -1) {
+        const jsonStr = remaining.slice(0, endIdx + 1);
+        const tail = remaining.slice(endIdx + 1);
+        const tc = this._parseToolCodeJson(jsonStr);
+        if (tc) { this._totalSeen++; return { text: tail, toolCalls: [tc] }; }
+      }
       return { text: remaining, toolCalls: [] };
     }
     if (this.inBareCall) {
       this.inBareCall = false;
-      const tc = this._parseBareToolCallJson(remaining);
-      if (tc) { this._totalSeen++; return { text: '', toolCalls: [tc] }; }
+      const endIdx = this._findClosingBrace();
+      if (endIdx !== -1) {
+        const jsonStr = remaining.slice(0, endIdx + 1);
+        const tail = remaining.slice(endIdx + 1);
+        const tc = this._parseBareToolCallJson(jsonStr);
+        if (tc) { this._totalSeen++; return { text: tail, toolCalls: [tc] }; }
+      }
       return { text: remaining, toolCalls: [] };
     }
     // Fallback: detect any remaining tool_code patterns in leftover buffer

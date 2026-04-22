@@ -2762,31 +2762,34 @@ const App = {
       } else if (cr.lastError && cr.percent == null && !cr.prompt?.limit) {
         creditCell = `<span class="text-xs" style="color:var(--error)" title="${this.esc(cr.lastError)}">获取失败</span>`;
       } else {
-        const pct = cr.percent != null ? Math.max(0, Math.min(100, cr.percent)) : null;
-        const pctStr = pct != null ? pct.toFixed(0) + '%' : '-';
-        const pctColor = pct == null ? 'var(--text-dim)'
-          : pct <= 10 ? 'var(--error)'
-          : pct <= 30 ? 'var(--warn, #f59e0b)'
-          : 'var(--success, #10b981)';
         const planName = cr.planName || '-';
         const fetchedAgo = cr.fetchedAt ? Math.round((Date.now() - cr.fetchedAt) / 60000) + 'm ago' : '-';
+        const barColor = (v) => v == null ? 'var(--text-dim)' : v <= 10 ? 'var(--error)' : v <= 30 ? 'var(--warn, #f59e0b)' : 'var(--success, #10b981)';
+        const bar = (label, pct) => {
+          if (pct == null) return '';
+          const v = Math.max(0, Math.min(100, pct));
+          const c = barColor(v);
+          return `<div style="display:flex;align-items:center;gap:4px;margin-top:2px">
+            <span class="text-xs" style="width:28px;flex-shrink:0;color:var(--text-dim)">${label}</span>
+            <div style="flex:1;height:4px;background:var(--surface-3);border-radius:2px;overflow:hidden">
+              <div style="height:100%;width:${v}%;background:${c};transition:width .3s"></div>
+            </div>
+            <span class="text-xs" style="width:28px;text-align:right;color:${c}">${v.toFixed(0)}%</span>
+          </div>`;
+        };
+        const promptPct = cr.prompt?.limit ? ((cr.prompt.remaining || 0) / cr.prompt.limit) * 100 : null;
         const tipLines = [
           `Plan: ${planName}`,
-          cr.dailyPercent != null ? `Daily:  ${cr.dailyPercent.toFixed(1)}% left` : '',
-          cr.weeklyPercent != null ? `Weekly: ${cr.weeklyPercent.toFixed(1)}% left` : '',
-          cr.prompt?.limit ? `Prompt: ${(cr.prompt.used || 0).toFixed(0)}/${cr.prompt.limit.toFixed(0)}` : '',
-          cr.flex?.limit ? `Flex:   ${(cr.flex.used || 0).toFixed(0)}/${cr.flex.limit.toFixed(0)}` : '',
           cr.dailyResetAt ? `Daily reset: ${new Date(cr.dailyResetAt * 1000).toLocaleString()}` : '',
+          cr.weeklyResetAt ? `Weekly reset: ${new Date(cr.weeklyResetAt * 1000).toLocaleString()}` : '',
+          cr.flex?.limit ? `Flex: ${(cr.flex.used || 0).toFixed(0)}/${cr.flex.limit.toFixed(0)}` : '',
           `Updated: ${fetchedAgo}`,
-          cr.lastError ? `Last error: ${cr.lastError}` : '',
         ].filter(Boolean).join('\n');
-        creditCell = `<div style="min-width:100px" title="${this.esc(tipLines)}">
-            <div class="text-xs" style="display:flex;justify-content:space-between;margin-bottom:2px">
-              <span>${this.esc(planName.slice(0, 10))}</span><span style="color:${pctColor}">${pctStr}</span>
-            </div>
-            <div style="height:4px;background:var(--surface-3);border-radius:2px;overflow:hidden">
-              <div style="height:100%;width:${pct != null ? pct : 0}%;background:${pctColor};transition:width .3s"></div>
-            </div>
+        creditCell = `<div style="min-width:120px" title="${this.esc(tipLines)}">
+            <div class="text-xs" style="margin-bottom:2px"><b>${this.esc(planName.slice(0, 12))}</b> <span style="color:var(--text-dim)">${fetchedAgo}</span></div>
+            ${bar('日', cr.dailyPercent)}
+            ${bar('周', cr.weeklyPercent)}
+            ${bar('P', promptPct)}
           </div>`;
       }
       return `

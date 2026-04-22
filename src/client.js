@@ -241,51 +241,45 @@ export class WindsurfClient {
         log.warn(`Panel state missing, re-warming LS port=${this.port}`);
         await this.warmupCascade(true).catch(() => {});
         sessionId = getLsEntryByPort(this.port)?.sessionId || randomUUID();
-        if (reuseEntry) reuseEntry.cascadeId = null; // force StartCascade
+        reuseEntry = null; // cascade expired — treat as fresh
         cascadeId = await openCascade();
       }
 
-      // Build the text payload. Two cases:
-      //   - Resuming an existing cascade: the backend already has the prior
-      //     turns cached, so we only send the newest user message.
-      //   - Fresh cascade: we have to pack the entire history into one shot
-      //     (Cascade doesn't accept a messages array). System blocks go on
-      //     top, then we render u/a turns as a labeled transcript so the
-      //     model can see its own prior replies — previously we dropped
-      //     assistant turns entirely and multi-turn context was broken.
-      //
-      // The caller (handlers/chat.js) is responsible for any tool-protocol
-      // preamble that needs to sit in front of the user text (client-defined
-      // OpenAI tools are serialized into a '<tool_call>{...}</tool_call>'
-      // emission contract there). This function just stitches system + u/a
-      // turns into the single text payload Cascade accepts.
-      // Always pack full history — Cascade server does NOT reliably keep
-      // per-cascade context across turns, so even reuse mode must send the
-      // complete conversation. Reuse only saves the StartCascade RPC. (#24)
       let text;
       let images = [];
       const systemMsgs = messages.filter(m => m.role === 'system');
       const convo = messages.filter(m => m.role === 'user' || m.role === 'assistant');
       const sysText = systemMsgs.map(m => contentToString(m.content)).join('\n').trim();
 
-      if (convo.length <= 1) {
+      const isResume = !!reuseEntry;
+
+      if (isResume || convo.length <= 1) {
         const last = convo[convo.length - 1];
         const extracted = await extractImages(last?.content ?? '');
         text = extracted.text;
         images = extracted.images;
+        if (!isResume && sysText) text = sysText + '\n\n' + text;
       } else {
+        const MAX_HISTORY_BYTES = 200_000;
         const lines = [];
-        for (let i = 0; i < convo.length - 1; i++) {
+        let historyBytes = 0;
+        for (let i = convo.length - 2; i >= 0; i--) {
           const m = convo[i];
           const tag = m.role === 'user' ? 'human' : 'assistant';
-          lines.push(`<${tag}>\n${contentToString(m.content)}\n</${tag}>`);
+          const line = `<${tag}>\n${contentToString(m.content)}\n</${tag}>`;
+          if (historyBytes + line.length > MAX_HISTORY_BYTES && lines.length > 0) {
+            log.info(`Cascade: trimmed history at turn ${i}/${convo.length} (${Math.round(historyBytes/1024)}KB kept, ${convo.length - 2 - i} turns dropped)`);
+            break;
+          }
+          lines.unshift(line);
+          historyBytes += line.length;
         }
         const latest = convo[convo.length - 1];
         const extracted = await extractImages(latest?.content ?? '');
         text = `The following is a multi-turn conversation. You MUST remember and use all information from prior turns.\n\n${lines.join('\n\n')}\n\n<human>\n${extracted.text}\n</human>`;
         images = extracted.images;
+        if (sysText) text = sysText + '\n\n' + text;
       }
-      if (sysText) text = sysText + '\n\n' + text;
       if (images.length) log.info(`Cascade: attaching ${images.length} image(s) to field 6`);
 
       // Step 2: Send message (retry once on panel-state-not-found)
@@ -300,6 +294,26 @@ export class WindsurfClient {
       } catch (e) {
         if (!isPanelMissing(e)) throw e;
         log.warn(`Panel state missing on Send, re-warming + restarting cascade port=${this.port}`);
+        // Cascade expired — fall back to fresh with FULL history.
+        // text was built as resume-only (last message). Rebuild it.
+        if (isResume && convo.length > 1) {
+          const MAX_HISTORY_BYTES = 200_000;
+          const lines = [];
+          let historyBytes = 0;
+          for (let i = convo.length - 2; i >= 0; i--) {
+            const m = convo[i];
+            const tag = m.role === 'user' ? 'human' : 'assistant';
+            const line = `<${tag}>\n${contentToString(m.content)}\n</${tag}>`;
+            if (historyBytes + line.length > MAX_HISTORY_BYTES && lines.length > 0) break;
+            lines.unshift(line);
+            historyBytes += line.length;
+          }
+          const latest = convo[convo.length - 1];
+          const extracted = await extractImages(latest?.content ?? '');
+          text = `The following is a multi-turn conversation. You MUST remember and use all information from prior turns.\n\n${lines.join('\n\n')}\n\n<human>\n${extracted.text}\n</human>`;
+          if (sysText) text = sysText + '\n\n' + text;
+          log.info('Cascade: rebuilt full history after resume failure');
+        }
         await this.warmupCascade(true).catch(() => {});
         sessionId = getLsEntryByPort(this.port)?.sessionId || randomUUID();
         const startProto = buildStartCascadeRequest(this.apiKey, sessionId);
@@ -386,20 +400,10 @@ export class WindsurfClient {
           }
         }
 
-        // Stall detection — two flavors:
-        //   (a) "cold stall": 30s+ ACTIVE but never saw any text or tool
-        //       call → planner is deadlocked before even starting to
-        //       produce output. Rotate account, don't make the user wait.
-        //   (b) "warm stall": we already streamed some text, but it hasn't
-        //       grown for 15s while status is still non-IDLE → planner is
-        //       stuck in a tool round-trip or upstream throttle. Accept
-        //       what we have as a complete response rather than waiting
-        //       out the full 180s maxWait with the client hanging.
+        // Cold stall: 30s+ ACTIVE but never saw any text or tool call.
         const elapsed = Date.now() - startTime;
-        // Cap at maxWait (180s): long-context requests can legitimately take
-        // that long to emit the first token from Cascade. Was 90s which
-        // still tripped on very long prompts (issue #5).
-        const coldStallMs = Math.min(maxWait, 30_000 + Math.floor(inputChars / 1500) * 5_000);
+        const effectiveChars = inputChars + (toolPreamble?.length ?? 0);
+        const coldStallMs = Math.min(maxWait, 30_000 + Math.floor(effectiveChars / 1500) * 5_000);
         if (elapsed > coldStallMs && sawActive && !sawText && seenToolCallIds.size === 0) {
           log.warn(`Cascade cold stall: ${elapsed}ms active without any text or tool call (threshold=${coldStallMs}ms, inputChars=${inputChars}), bailing`);
           endReason = 'stall_cold';
@@ -407,31 +411,9 @@ export class WindsurfClient {
           err.isModelError = true;
           throw err;
         }
-        if (sawText && lastStatus !== 1 && (Date.now() - lastGrowthAt) > NO_GROWTH_STALL_MS) {
-          const diag = {
-            msSinceGrowth: Date.now() - lastGrowthAt,
-            textLen: totalYielded,
-            thinkingLen: totalThinking,
-            stepCount: yieldedByStep.size,
-            toolCalls: seenToolCallIds.size,
-            lastStatus,
-          };
-          // Short-reply stall → treat as error so handlers/chat.js retries on
-          // another account. A 50-char preamble is worse than no reply at all
-          // because the client accepts it as "successful" and shows it to the
-          // user. Retry only if we haven't streamed anything substantial yet
-          // (if we did, partial delivery + idle end is fine).
-          if (totalYielded < STALL_RETRY_MIN_TEXT) {
-            log.warn('Cascade warm stall (short, retrying on next account)', diag);
-            endReason = 'stall_warm_retry';
-            const err = new Error('Cascade planner stalled after preamble — no progress for 25s');
-            err.isModelError = true;
-            throw err;
-          }
-          log.warn('Cascade warm stall (accepting partial)', diag);
-          endReason = 'stall_warm';
-          break; // return what we have as a successful response
-        }
+
+        // NOTE: warm stall check moved AFTER step loop (below) so
+        // lastGrowthAt reflects data read in this poll, not the previous one.
 
         // Any trajectory change counts as forward progress. A new step, a new
         // tool call proposal, or thinking growth all reset the stall timer so
@@ -510,6 +492,22 @@ export class WindsurfClient {
           }
         }
 
+        // Warm stall: text stopped growing for 25s while planner is active.
+        // Placed AFTER the step loop so lastGrowthAt is current-poll fresh.
+        if (sawText && lastStatus !== 1 && (Date.now() - lastGrowthAt) > NO_GROWTH_STALL_MS) {
+          const diag = { msSinceGrowth: Date.now() - lastGrowthAt, textLen: totalYielded, thinkingLen: totalThinking, stepCount: yieldedByStep.size, toolCalls: seenToolCallIds.size, lastStatus };
+          if (totalYielded < STALL_RETRY_MIN_TEXT) {
+            log.warn('Cascade warm stall (short, retrying on next account)', diag);
+            endReason = 'stall_warm_retry';
+            const err = new Error('Cascade planner stalled after preamble — no progress for 25s');
+            err.isModelError = true;
+            throw err;
+          }
+          log.warn('Cascade warm stall (accepting partial)', diag);
+          endReason = 'stall_warm';
+          break;
+        }
+
         // Check status
         const statusProto = buildGetTrajectoryRequest(cascadeId);
         const statusResp = await grpcUnary(
@@ -534,7 +532,8 @@ export class WindsurfClient {
           idleCount++;
           // Require at least a little text OR a long idle streak before
           // accepting "done", so we don't race the first visible chunk.
-          const canBreak = sawText ? idleCount >= 2 : idleCount >= 4;
+          const growthSettled = (Date.now() - lastGrowthAt) > pollInterval * 2;
+          const canBreak = sawText ? (idleCount >= 2 && growthSettled) : idleCount >= 4;
           if (canBreak) {
             // Final sweep
             const finalResp = await grpcUnary(

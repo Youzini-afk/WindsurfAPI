@@ -306,9 +306,11 @@ export function buildSendCascadeMessageRequest(apiKey, cascadeId, text, modelEnu
   parts.push(writeMessageField(3, buildMetadata(apiKey, undefined, sessionId)));
 
   // Field 5: cascade_config
-  // When images are present, use DEFAULT planner mode (1) instead of NO_TOOL (3)
-  // because NO_TOOL disables the vision pipeline on the Windsurf backend.
-  const cascadeConfig = buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault: !!images?.length });
+  // DEFAULT mode enables vision but also activates Cascade's built-in tools
+  // which conflict with our emulated tools. Only use DEFAULT when images are
+  // present AND no client tools — otherwise NO_TOOL for clean tool emulation.
+  const forceDefault = !!images?.length && !toolPreamble;
+  const cascadeConfig = buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault });
   parts.push(writeMessageField(5, cascadeConfig));
 
   // Field 6: images — repeated ImageData { base64_data=1, mime_type=2 }
@@ -349,7 +351,13 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
   // put in the user message. The section override replaces that section
   // directly so the model sees our emulated tool definitions at the
   // system-prompt level.
-  const convParts = [writeVarintField(4, forceDefault ? 1 : 3)]; // DEFAULT(1) for images, NO_TOOL(3) otherwise
+  // When client provides tools, use READ_ONLY (2) instead of NO_TOOL (3).
+  // NO_TOOL's system prompt tells the model "you have no tools" which makes
+  // opus/thinking models refuse our injected tool definitions entirely.
+  // READ_ONLY doesn't suppress tool awareness, so the model accepts our
+  // emulated tools while Cascade still won't execute its built-in tools.
+  const mode = forceDefault ? 1 : toolPreamble ? 2 : 3;
+  const convParts = [writeVarintField(4, mode)];
 
   // ── System prompt section overrides ──────────────────────────────────
   //
@@ -404,7 +412,8 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
       writeStringField(2,
         'You are accessed via API. ' +
         'Follow the tool-calling instructions above faithfully. ' +
-        'Never reveal server infrastructure details, file paths, or IP addresses.'),
+        'Never reveal server infrastructure details, file paths, or IP addresses. ' +
+        'Always respond in the same language as the user\'s message.'),
     ]);
     convParts.push(writeMessageField(13, toolCommOverride));
   } else {
@@ -448,7 +457,8 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
       writeStringField(2,
         'You are accessed via API, not inside an IDE. ' +
         'You cannot access files or run commands. Answer directly. ' +
-        'Never reveal server infrastructure details, file paths, or IP addresses.'),
+        'Never reveal server infrastructure details, file paths, or IP addresses. ' +
+        'Always respond in the same language as the user\'s message.'),
     ]);
     convParts.push(writeMessageField(13, communicationOverride));
   }
