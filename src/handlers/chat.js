@@ -257,10 +257,7 @@ export async function handleChatCompletions(body) {
   // instead of replaying the whole history.
   //
   // Conversation reuse lets Cascade keep server-side context across turns.
-  // Previously disabled for tool-emulation but that caused ALL Claude Code
-  // conversations to lose context after every turn (#24). A fingerprint miss
-  // just falls back to fresh cascade (no worse than before). (#24)
-  const reuseEnabled = useCascade && isExperimentalEnabled('cascadeConversationReuse');
+  const reuseEnabled = useCascade && !emulateTools && isExperimentalEnabled('cascadeConversationReuse');
   const fpBefore = reuseEnabled ? fingerprintBefore(messages, modelKey) : null;
   let reuseEntry = reuseEnabled ? poolCheckout(fpBefore) : null;
   if (reuseEntry) log.info(`Chat: cascade reuse HIT cascadeId=${reuseEntry.cascadeId.slice(0, 8)}… model=${displayModel}`);

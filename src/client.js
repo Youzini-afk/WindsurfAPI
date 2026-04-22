@@ -358,20 +358,10 @@ export class WindsurfClient {
           }
         }
 
-        // Stall detection — two flavors:
-        //   (a) "cold stall": 30s+ ACTIVE but never saw any text or tool
-        //       call → planner is deadlocked before even starting to
-        //       produce output. Rotate account, don't make the user wait.
-        //   (b) "warm stall": we already streamed some text, but it hasn't
-        //       grown for 15s while status is still non-IDLE → planner is
-        //       stuck in a tool round-trip or upstream throttle. Accept
-        //       what we have as a complete response rather than waiting
-        //       out the full 180s maxWait with the client hanging.
+        // Cold stall: 30s+ ACTIVE but never saw any text or tool call.
         const elapsed = Date.now() - startTime;
-        // Cap at maxWait (180s): long-context requests can legitimately take
-        // that long to emit the first token from Cascade. Was 90s which
-        // still tripped on very long prompts (issue #5).
-        const coldStallMs = Math.min(maxWait, 30_000 + Math.floor(inputChars / 1500) * 5_000);
+        const effectiveChars = inputChars + (toolPreamble?.length ?? 0);
+        const coldStallMs = Math.min(maxWait, 30_000 + Math.floor(effectiveChars / 1500) * 5_000);
         if (elapsed > coldStallMs && sawActive && !sawText && seenToolCallIds.size === 0) {
           log.warn(`Cascade cold stall: ${elapsed}ms active without any text or tool call (threshold=${coldStallMs}ms, inputChars=${inputChars}), bailing`);
           endReason = 'stall_cold';
@@ -379,31 +369,9 @@ export class WindsurfClient {
           err.isModelError = true;
           throw err;
         }
-        if (sawText && lastStatus !== 1 && (Date.now() - lastGrowthAt) > NO_GROWTH_STALL_MS) {
-          const diag = {
-            msSinceGrowth: Date.now() - lastGrowthAt,
-            textLen: totalYielded,
-            thinkingLen: totalThinking,
-            stepCount: yieldedByStep.size,
-            toolCalls: seenToolCallIds.size,
-            lastStatus,
-          };
-          // Short-reply stall → treat as error so handlers/chat.js retries on
-          // another account. A 50-char preamble is worse than no reply at all
-          // because the client accepts it as "successful" and shows it to the
-          // user. Retry only if we haven't streamed anything substantial yet
-          // (if we did, partial delivery + idle end is fine).
-          if (totalYielded < STALL_RETRY_MIN_TEXT) {
-            log.warn('Cascade warm stall (short, retrying on next account)', diag);
-            endReason = 'stall_warm_retry';
-            const err = new Error('Cascade planner stalled after preamble — no progress for 25s');
-            err.isModelError = true;
-            throw err;
-          }
-          log.warn('Cascade warm stall (accepting partial)', diag);
-          endReason = 'stall_warm';
-          break; // return what we have as a successful response
-        }
+
+        // NOTE: warm stall check moved AFTER step loop (below) so
+        // lastGrowthAt reflects data read in this poll, not the previous one.
 
         // Any trajectory change counts as forward progress. A new step, a new
         // tool call proposal, or thinking growth all reset the stall timer so
@@ -482,6 +450,22 @@ export class WindsurfClient {
           }
         }
 
+        // Warm stall: text stopped growing for 25s while planner is active.
+        // Placed AFTER the step loop so lastGrowthAt is current-poll fresh.
+        if (sawText && lastStatus !== 1 && (Date.now() - lastGrowthAt) > NO_GROWTH_STALL_MS) {
+          const diag = { msSinceGrowth: Date.now() - lastGrowthAt, textLen: totalYielded, thinkingLen: totalThinking, stepCount: yieldedByStep.size, toolCalls: seenToolCallIds.size, lastStatus };
+          if (totalYielded < STALL_RETRY_MIN_TEXT) {
+            log.warn('Cascade warm stall (short, retrying on next account)', diag);
+            endReason = 'stall_warm_retry';
+            const err = new Error('Cascade planner stalled after preamble — no progress for 25s');
+            err.isModelError = true;
+            throw err;
+          }
+          log.warn('Cascade warm stall (accepting partial)', diag);
+          endReason = 'stall_warm';
+          break;
+        }
+
         // Check status
         const statusProto = buildGetTrajectoryRequest(cascadeId);
         const statusResp = await grpcUnary(
@@ -506,7 +490,8 @@ export class WindsurfClient {
           idleCount++;
           // Require at least a little text OR a long idle streak before
           // accepting "done", so we don't race the first visible chunk.
-          const canBreak = sawText ? idleCount >= 2 : idleCount >= 4;
+          const growthSettled = (Date.now() - lastGrowthAt) > pollInterval * 3;
+          const canBreak = sawText ? (idleCount >= 3 && growthSettled) : idleCount >= 4;
           if (canBreak) {
             // Final sweep
             const finalResp = await grpcUnary(

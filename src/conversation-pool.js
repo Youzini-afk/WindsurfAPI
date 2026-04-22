@@ -17,7 +17,7 @@
  *     the same LS and the same account or the cascade_id is meaningless.
  *   - A checked-out entry is removed from the pool. Concurrent second request
  *     with the same fingerprint falls back to a fresh cascade.
- *   - TTL 10 min; LRU eviction at 500 entries.
+ *   - TTL 30 min; LRU eviction at 500 entries.
  */
 
 import { createHash } from 'crypto';
@@ -57,27 +57,31 @@ function canonicalise(messages) {
  * may restructure content arrays, add tool_use blocks, or modify text,
  * causing hash mismatches and 0% hit rate. (#24)
  */
+function systemPrefix(messages) {
+  return messages
+    .filter(m => m.role === 'system')
+    .map(m => typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''))
+    .join('\0');
+}
+
 export function fingerprintBefore(messages, modelKey = '') {
   if (!Array.isArray(messages) || messages.length < 2) return null;
   const users = messages.filter(m => m.role === 'user');
   if (users.length < 2) return null;
-  return sha256(modelKey + '\0' + JSON.stringify(canonicalise(users.slice(0, -1))));
+  return sha256(modelKey + '\0' + systemPrefix(messages) + '\0' + JSON.stringify(canonicalise(users.slice(0, -1))));
 }
 
-/**
- * Fingerprint for the full conversation after this turn completes.
- * Uses all user messages (including current). The *next* request's
- * `fingerprintBefore` will hash users[:-1] which equals this value.
- */
 export function fingerprintAfter(messages, modelKey = '') {
   const users = messages.filter(m => m.role === 'user');
   if (!users.length) return null;
-  return sha256(modelKey + '\0' + JSON.stringify(canonicalise(users)));
+  return sha256(modelKey + '\0' + systemPrefix(messages) + '\0' + JSON.stringify(canonicalise(users)));
 }
 
 function prune(now) {
+  for (const [fp, e] of _pool) {
+    if (now - e.lastAccess > POOL_TTL_MS) { _pool.delete(fp); stats.expired++; }
+  }
   if (_pool.size <= POOL_MAX) return;
-  // Drop oldest entries until back under the cap.
   const entries = [..._pool.entries()].sort((a, b) => a[1].lastAccess - b[1].lastAccess);
   const toDrop = entries.length - POOL_MAX;
   for (let i = 0; i < toDrop; i++) {
@@ -100,6 +104,7 @@ export function checkout(fingerprint) {
   _pool.delete(fingerprint);
   if (Date.now() - entry.lastAccess > POOL_TTL_MS) {
     stats.expired++;
+    stats.misses++;
     return null;
   }
   stats.hits++;
