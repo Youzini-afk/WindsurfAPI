@@ -15,3 +15,17 @@ src/runtime-config.json
 audit
 *.log
 *.png
+__pycache__
+.docker-data
+docs
+audit
+scripts
+bugsy
+windsurf-api
+codeium.zip
+codeium_ext
+windsurf-grpc
+deploy-main.py
+deploy-us.py
+sshpass.sh
+sshpass2.sh

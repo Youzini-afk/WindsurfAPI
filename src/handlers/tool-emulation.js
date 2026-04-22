@@ -227,7 +227,69 @@ export class ToolCallStreamParser {
     this.buffer = '';
     this.inToolCall = false;
     this.inToolResult = false;
+    this.inToolCode = false;
+    this.inBareCall = false;
     this._totalSeen = 0;
+  }
+
+  _findClosingBrace() {
+    let depth = 0;
+    let inStr = false;
+    let escaped = false;
+    for (let i = 0; i < this.buffer.length; i++) {
+      const ch = this.buffer[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\' && inStr) { escaped = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === '{') depth++;
+      if (ch === '}') { depth--; if (depth === 0) return i; }
+    }
+    return -1;
+  }
+
+  _consumeJsonBlock(parseFn, doneCalls, safeParts) {
+    const endIdx = this._findClosingBrace();
+    if (endIdx === -1) return false;
+    const jsonStr = this.buffer.slice(0, endIdx + 1);
+    this.buffer = this.buffer.slice(endIdx + 1);
+    const tc = parseFn(jsonStr);
+    if (tc) {
+      doneCalls.push(tc);
+      this._totalSeen++;
+    } else {
+      safeParts.push(jsonStr);
+    }
+    return true;
+  }
+
+  _parseToolCodeJson(jsonStr) {
+    const parsed = safeParseJson(jsonStr);
+    if (!parsed || typeof parsed.tool_code !== 'string') return null;
+    const m = parsed.tool_code.match(/^([^(]+)\(([^]*)\)$/);
+    if (!m) return null;
+    const name = m[1].trim();
+    let args = m[2].trim();
+    if (args.startsWith('"') && args.endsWith('"')) args = `{"input":${args}}`;
+    else if (!args.startsWith('{')) args = args ? `{"input":"${args}"}` : '{}';
+    const parsedArgs = safeParseJson(args) || { input: args };
+    return {
+      id: `call_tc_${this._totalSeen}_${Date.now().toString(36)}`,
+      name,
+      argumentsJson: JSON.stringify(parsedArgs),
+    };
+  }
+
+  _parseBareToolCallJson(jsonStr) {
+    const parsed = safeParseJson(jsonStr);
+    if (!parsed || typeof parsed.name !== 'string' || !('arguments' in parsed)) return null;
+    const args = parsed.arguments;
+    const argsJson = typeof args === 'string' ? args : JSON.stringify(args ?? {});
+    return {
+      id: `call_${this._totalSeen}_${Date.now().toString(36)}`,
+      name: parsed.name,
+      argumentsJson: argsJson,
+    };
   }
 
   feed(delta) {
@@ -239,12 +301,14 @@ export class ToolCallStreamParser {
     const TC_CLOSE = '</tool_call>';
     const TR_PREFIX = '<tool_result';
     const TR_CLOSE = '</tool_result>';
+    const TC_CODE = '{"tool_code"';
+    const TC_BARE = '{"name"';
 
     while (true) {
       // ── Inside a <tool_result …>…</tool_result> block — discard body ──
       if (this.inToolResult) {
         const closeIdx = this.buffer.indexOf(TR_CLOSE);
-        if (closeIdx === -1) break; // wait for close tag
+        if (closeIdx === -1) break;
         this.buffer = this.buffer.slice(closeIdx + TR_CLOSE.length);
         this.inToolResult = false;
         continue;
@@ -253,7 +317,7 @@ export class ToolCallStreamParser {
       // ── Inside a <tool_call>…</tool_call> block — parse JSON body ──
       if (this.inToolCall) {
         const closeIdx = this.buffer.indexOf(TC_CLOSE);
-        if (closeIdx === -1) break; // wait for more
+        if (closeIdx === -1) break;
         const body = this.buffer.slice(0, closeIdx).trim();
         this.buffer = this.buffer.slice(closeIdx + TC_CLOSE.length);
         this.inToolCall = false;
@@ -269,32 +333,47 @@ export class ToolCallStreamParser {
           });
           this._totalSeen++;
         } else {
-          // Malformed — surface as literal text so it's debuggable
           safeParts.push(`<tool_call>${body}</tool_call>`);
         }
+        continue;
+      }
+
+      // ── Inside a {"tool_code": "…"} block ──
+      if (this.inToolCode) {
+        if (!this._consumeJsonBlock(s => this._parseToolCodeJson(s), doneCalls, safeParts)) break;
+        this.inToolCode = false;
+        continue;
+      }
+
+      // ── Inside a bare {"name":"…","arguments":{…}} block ──
+      if (this.inBareCall) {
+        if (!this._consumeJsonBlock(s => this._parseBareToolCallJson(s), doneCalls, safeParts)) break;
+        this.inBareCall = false;
         continue;
       }
 
       // ── Normal mode — scan for the next opening tag ──
       const tcIdx = this.buffer.indexOf(TC_OPEN);
       const trIdx = this.buffer.indexOf(TR_PREFIX);
+      const tcCodeIdx = this.buffer.indexOf(TC_CODE);
+      const tcBareIdx = this.buffer.indexOf(TC_BARE);
 
-      // Pick whichever opening tag comes first
       let nextIdx = -1;
-      let isResult = false;
-      if (tcIdx !== -1 && (trIdx === -1 || tcIdx <= trIdx)) {
-        nextIdx = tcIdx;
-      } else if (trIdx !== -1) {
-        nextIdx = trIdx;
-        isResult = true;
+      let tagType = null;
+      const candidates = [];
+      if (tcIdx !== -1) candidates.push({ idx: tcIdx, type: 'tc' });
+      if (trIdx !== -1) candidates.push({ idx: trIdx, type: 'tr' });
+      if (tcCodeIdx !== -1) candidates.push({ idx: tcCodeIdx, type: 'code' });
+      if (tcBareIdx !== -1 && tcBareIdx !== tcCodeIdx) candidates.push({ idx: tcBareIdx, type: 'bare' });
+      if (candidates.length) {
+        candidates.sort((a, b) => a.idx - b.idx);
+        nextIdx = candidates[0].idx;
+        tagType = candidates[0].type;
       }
 
       if (nextIdx === -1) {
-        // No tags found. Hold back any suffix that could be a partial
-        // prefix of either opening tag so we don't leak mid-tag to the
-        // client.
         let holdLen = 0;
-        for (const prefix of [TC_OPEN, TR_PREFIX]) {
+        for (const prefix of [TC_OPEN, TR_PREFIX, TC_CODE, TC_BARE]) {
           const maxHold = Math.min(prefix.length - 1, this.buffer.length);
           for (let len = maxHold; len > 0; len--) {
             if (this.buffer.endsWith(prefix.slice(0, len))) {
@@ -309,30 +388,31 @@ export class ToolCallStreamParser {
         break;
       }
 
-      // Emit text before the tag
       if (nextIdx > 0) safeParts.push(this.buffer.slice(0, nextIdx));
 
-      if (!isResult) {
-        // <tool_call>
+      if (tagType === 'tc') {
         this.buffer = this.buffer.slice(nextIdx + TC_OPEN.length);
         this.inToolCall = true;
-      } else {
-        // <tool_result …> — may have attributes, find closing >
+      } else if (tagType === 'tr') {
         const closeAngle = this.buffer.indexOf('>', nextIdx + TR_PREFIX.length);
         if (closeAngle === -1) {
-          // Incomplete open tag; hold everything from the tag start
           this.buffer = this.buffer.slice(nextIdx);
           break;
         }
         this.buffer = this.buffer.slice(closeAngle + 1);
         this.inToolResult = true;
+      } else if (tagType === 'code') {
+        this.buffer = this.buffer.slice(nextIdx);
+        this.inToolCode = true;
+      } else if (tagType === 'bare') {
+        this.buffer = this.buffer.slice(nextIdx);
+        this.inBareCall = true;
       }
     }
 
     return { text: safeParts.join(''), toolCalls: doneCalls };
   }
 
-  /** Call at end of stream. Returns any leftover buffer as literal text. */
   flush() {
     const remaining = this.buffer;
     this.buffer = '';
@@ -342,9 +422,38 @@ export class ToolCallStreamParser {
     }
     if (this.inToolResult) {
       this.inToolResult = false;
-      return { text: '', toolCalls: [] }; // discard incomplete tool_result
+      return { text: '', toolCalls: [] };
     }
-    return { text: remaining, toolCalls: [] };
+    if (this.inToolCode) {
+      this.inToolCode = false;
+      const tc = this._parseToolCodeJson(remaining);
+      if (tc) { this._totalSeen++; return { text: '', toolCalls: [tc] }; }
+      return { text: remaining, toolCalls: [] };
+    }
+    if (this.inBareCall) {
+      this.inBareCall = false;
+      const tc = this._parseBareToolCallJson(remaining);
+      if (tc) { this._totalSeen++; return { text: '', toolCalls: [tc] }; }
+      return { text: remaining, toolCalls: [] };
+    }
+    // Fallback: detect any remaining tool_code patterns in leftover buffer
+    const toolCalls = [];
+    const cleaned = remaining.replace(/\{"tool_code"\s*:\s*"([^"]+?)\(([^]*?)\)"\s*\}/g, (_match, name, rawArgs) => {
+      try {
+        let args = rawArgs.replace(/\\"/g, '"').trim();
+        if (args.startsWith('"') && args.endsWith('"')) args = `{"input":${args}}`;
+        else if (!args.startsWith('{')) args = `{"input":"${args}"}`;
+        const parsed = safeParseJson(args) || { input: args };
+        toolCalls.push({
+          id: `call_tc_${this._totalSeen}_${Date.now().toString(36)}`,
+          name,
+          argumentsJson: JSON.stringify(parsed),
+        });
+        this._totalSeen++;
+      } catch {}
+      return '';
+    });
+    return { text: toolCalls.length ? cleaned.trim() : remaining, toolCalls };
   }
 }
 

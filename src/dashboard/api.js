@@ -635,11 +635,15 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
     }
     stopLanguageServer();
     setTimeout(async () => {
-      await startLanguageServer({
-        binaryPath: config.lsBinaryPath,
-        port: config.lsPort,
-        apiServerUrl: config.codeiumApiUrl,
-      });
+      try {
+        await startLanguageServer({
+          binaryPath: config.lsBinaryPath,
+          port: config.lsPort,
+          apiServerUrl: config.codeiumApiUrl,
+        });
+      } catch (e) {
+        log.error(`Language server restart failed: ${e.message}`);
+      }
     }, 2000);
     return json(res, 200, { success: true, message: 'Restarting language server...' });
   }
@@ -900,28 +904,40 @@ const PRIVATE_PROXY_HOST = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|16
 
 async function testProxy({ host, port, username, password, type }) {
   if (PRIVATE_PROXY_HOST.test(host)) throw new Error('代理地址不能指向内网/本机');
-  const http = await import('node:http');
+  const { isSocks, createSocksTunnel } = await import('../socks.js');
   const tls = await import('node:tls');
-  return new Promise((resolve, reject) => {
-    const targetHost = 'api.ipify.org';
-    const targetPort = 443;
-    const authHeader = username
-      ? { 'Proxy-Authorization': 'Basic ' + Buffer.from(`${username}:${password || ''}`).toString('base64') }
-      : {};
-    const req = http.request({
-      host,
-      port,
-      method: 'CONNECT',
-      path: `${targetHost}:${targetPort}`,
-      headers: { Host: `${targetHost}:${targetPort}`, ...authHeader },
-      timeout: 10000,
+  const targetHost = 'api.ipify.org';
+  const targetPort = 443;
+  const proxy = { host, port, username, password, type };
+
+  // Get a raw TCP socket — either via SOCKS5 or HTTP CONNECT
+  let socket;
+  if (isSocks(proxy)) {
+    socket = await createSocksTunnel(proxy, targetHost, targetPort, 10000);
+  } else {
+    const http = await import('node:http');
+    socket = await new Promise((resolve, reject) => {
+      const authHeader = username
+        ? { 'Proxy-Authorization': 'Basic ' + Buffer.from(`${username}:${password || ''}`).toString('base64') }
+        : {};
+      const req = http.request({
+        host, port, method: 'CONNECT',
+        path: `${targetHost}:${targetPort}`,
+        headers: { Host: `${targetHost}:${targetPort}`, ...authHeader },
+        timeout: 10000,
+      });
+      req.on('connect', (res, sock) => {
+        if (res.statusCode !== 200) { sock.destroy(); return reject(new Error(`代理返回 HTTP ${res.statusCode}`)); }
+        resolve(sock);
+      });
+      req.on('error', (err) => reject(new Error(`连接失败: ${err.message}`)));
+      req.on('timeout', () => { req.destroy(); reject(new Error('超时（10s）')); });
+      req.end();
     });
-    req.on('connect', (res, socket) => {
-      if (res.statusCode !== 200) {
-        socket.destroy();
-        return reject(new Error(`代理返回 HTTP ${res.statusCode}`));
-      }
-      // Do a quick TLS handshake + GET to verify the tunnel actually works
+  }
+
+  // TLS handshake + GET to verify the tunnel works
+  return new Promise((resolve, reject) => {
       const tlsSock = tls.connect({ socket, servername: targetHost, rejectUnauthorized: false }, () => {
         tlsSock.write(`GET / HTTP/1.1\r\nHost: ${targetHost}\r\nConnection: close\r\nUser-Agent: WindsurfAPI/ProxyTest\r\n\r\n`);
       });
@@ -938,9 +954,5 @@ async function testProxy({ host, port, username, password, type }) {
         resolve({ egressIp: ip, type });
       });
       tlsSock.on('error', (err) => reject(new Error(`TLS 失败: ${err.message}`)));
-    });
-    req.on('error', (err) => reject(new Error(`连接失败: ${err.message}`)));
-    req.on('timeout', () => { req.destroy(); reject(new Error('超时（10s）')); });
-    req.end();
   });
 }

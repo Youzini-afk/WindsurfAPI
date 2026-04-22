@@ -375,7 +375,10 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
       '\n\nIMPORTANT: You have real, callable functions described above. ' +
       'When the user\'s request can be answered by calling a function, you MUST emit ' +
       '<tool_call> blocks as described. Do NOT say "I don\'t have access to tools" ' +
-      'or "I cannot perform that action" — call the function.';
+      'or "I cannot perform that action" — call the function.\n' +
+      'CRITICAL FORMAT RULE: You MUST use ONLY the <tool_call>{"name":"...","arguments":{...}}</tool_call> format. ' +
+      'Do NOT use tool_code, function_call, or any other format. ' +
+      'Do NOT wrap calls in ```json blocks. ONLY use <tool_call>...</tool_call> XML tags.';
     const additionalSection = Buffer.concat([
       writeVarintField(1, 1),             // SECTION_OVERRIDE_MODE_OVERRIDE
       writeStringField(2, toolPreamble + reinforcement),

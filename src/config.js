@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -40,7 +40,12 @@ function loadEnv() {
 
 loadEnv();
 
-const APP_DATA_DIR = resolvePath(process.env.APP_DATA_DIR, '.data');
+const DATA_DIR = resolvePath(process.env.DATA_DIR || process.env.APP_DATA_DIR, '.data');
+try {
+  mkdirSync(DATA_DIR, { recursive: true });
+} catch {}
+
+const APP_DATA_DIR = DATA_DIR;
 const HOME_DIR = resolvePath(process.env.HOME_DIR || process.env.HOME || process.env.USERPROFILE, resolve(APP_DATA_DIR, 'home'));
 const WINDSURF_HOME = resolvePath(process.env.WINDSURF_HOME, '/opt/windsurf');
 const WINDSURF_DATA_DIR = resolvePath(process.env.WINDSURF_DATA_DIR, resolve(WINDSURF_HOME, 'data'));
@@ -65,6 +70,7 @@ const CLASH_BINARY_PATH = resolvePath(process.env.CLASH_BINARY_PATH, resolve(WIN
 
 export const config = {
   repoRoot: ROOT,
+  dataDir: DATA_DIR,
   appDataDir: APP_DATA_DIR,
   homeDir: HOME_DIR,
   windsurfHome: WINDSURF_HOME,
