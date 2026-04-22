@@ -6,6 +6,7 @@
 import http from 'http';
 import https from 'https';
 import { log } from '../config.js';
+import { isSocks, createSocksTunnel } from '../socks.js';
 
 const FIREBASE_API_KEY = 'AIzaSyDsOl-1XpT5err0Tcnx8FFod1H8gVGIycY';
 const FIREBASE_AUTH_URL = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`;
@@ -78,9 +79,10 @@ function buildJsonHeaders(fingerprint, body, extra = {}) {
   };
 }
 
-// ─── Proxy tunnel (HTTP CONNECT) ──────────────────────────
+// ─── Proxy tunnel (HTTP CONNECT or SOCKS5) ───────────────
 
 function createProxyTunnel(proxy, targetHost, targetPort) {
+  if (isSocks(proxy)) return createSocksTunnel(proxy, targetHost, targetPort);
   return new Promise((resolve, reject) => {
     const proxyHost = proxy.host.replace(/:\d+$/, '');
     const proxyPort = proxy.port || 8080;

@@ -27,9 +27,11 @@ const USER_STATUS_PATH = '/exa.seat_management_pb.SeatManagementService/GetUserS
 const MODEL_CONFIGS_PATH = '/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs';
 const RATE_LIMIT_PATH = '/exa.api_server_pb.ApiServerService/CheckUserMessageRateLimit';
 
-// Tunnel HTTPS through an HTTP CONNECT proxy. Mirrors dashboard/windsurf-login.js
-// so per-account outbound IPs stay consistent across login and credit fetch.
+import { isSocks, createSocksTunnel } from './socks.js';
+
+// Tunnel HTTPS through an HTTP CONNECT proxy or SOCKS5 proxy.
 function createProxyTunnel(proxy, targetHost, targetPort) {
+  if (isSocks(proxy)) return createSocksTunnel(proxy, targetHost, targetPort);
   return new Promise((resolve, reject) => {
     const proxyHost = proxy.host.replace(/:\d+$/, '');
     const proxyPort = proxy.port || 8080;
