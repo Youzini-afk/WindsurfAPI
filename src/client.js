@@ -8,6 +8,7 @@
 
 import http from 'http';
 import https from 'https';
+import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { pathToFileURL } from 'url';
 import { config, log } from './config.js';
@@ -158,7 +159,8 @@ export class WindsurfClient {
     if (lsEntry.workspaceInit) return lsEntry.workspaceInit;
 
     const sessionId = lsEntry.sessionId;
-    const workspacePath = config.workspaceDir;
+    const wsId = this.apiKey.slice(0, 8).replace(/[^a-z0-9]/gi, 'x');
+    const workspacePath = join(config.workspaceDir, `workspace-${wsId}`);
     const workspaceUri = pathToFileURL(workspacePath).href;
 
     lsEntry.workspaceInit = (async () => {
@@ -356,7 +358,7 @@ export class WindsurfClient {
       let lastGrowthAt = Date.now();
       let lastStepCount = 0;
       const maxWait = 180_000;
-      const pollInterval = 250;
+      const pollInterval = 500;
       const IDLE_GRACE_MS = 8_000;     // minimum time before idle-break allowed
       // 25s no progress on any signal = genuine stall. Was 15s + text-only,
       // which misfired on long thinking phases and returned tiny "Let me…"

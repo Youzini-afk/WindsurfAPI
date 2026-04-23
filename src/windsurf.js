@@ -62,6 +62,7 @@ import {
   writeVarintField, writeStringField, writeMessageField, writeBytesField,
   writeBoolField, parseFields, getField, getAllFields,
 } from './proto.js';
+import { getSystemPrompts } from './runtime-config.js';
 
 // ─── Enums ─────────────────────────────────────────────────
 
@@ -85,16 +86,20 @@ function encodeTimestamp() {
 
 // ─── Metadata ──────────────────────────────────────────────
 
+import { platform, arch } from 'os';
+const _os = platform() === 'darwin' ? 'macos' : platform() === 'win32' ? 'windows' : 'linux';
+const _hw = arch() === 'arm64' ? 'arm64' : 'x86_64';
+
 export function buildMetadata(apiKey, version = '1.9600.41', sessionId = null) {
   return Buffer.concat([
     writeStringField(1, 'windsurf'),          // ide_name
     writeStringField(2, version),             // extension_version
     writeStringField(3, apiKey),              // api_key
     writeStringField(4, 'en'),                // locale
-    writeStringField(5, 'linux'),             // os
+    writeStringField(5, _os),                 // os
     writeStringField(7, version),             // ide_version
-    writeStringField(8, 'x86_64'),            // hardware
-    writeVarintField(9, Date.now()),           // request_id
+    writeStringField(8, _hw),                 // hardware
+    writeVarintField(9, Math.floor(Math.random() * 2**48)),  // request_id
     writeStringField(10, sessionId || randomUUID()), // session_id
     writeStringField(12, 'windsurf'),          // extension_name
   ]);
@@ -281,7 +286,11 @@ export function buildUpdateWorkspaceTrustRequest(apiKey, _ignored, trusted = tru
  * Field 1: metadata
  */
 export function buildStartCascadeRequest(apiKey, sessionId) {
-  return writeMessageField(1, buildMetadata(apiKey, undefined, sessionId));
+  return Buffer.concat([
+    writeMessageField(1, buildMetadata(apiKey, undefined, sessionId)),
+    writeVarintField(4, 1),  // source = CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
+    writeVarintField(5, 1),  // trajectory_type = CORTEX_TRAJECTORY_TYPE_USER_MAINLINE
+  ]);
 }
 
 /**
@@ -351,12 +360,10 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
   // put in the user message. The section override replaces that section
   // directly so the model sees our emulated tool definitions at the
   // system-prompt level.
-  // When client provides tools, use READ_ONLY (2) instead of NO_TOOL (3).
-  // NO_TOOL's system prompt tells the model "you have no tools" which makes
-  // opus/thinking models refuse our injected tool definitions entirely.
-  // READ_ONLY doesn't suppress tool awareness, so the model accepts our
-  // emulated tools while Cascade still won't execute its built-in tools.
-  const mode = forceDefault ? 1 : toolPreamble ? 2 : 3;
+  // NO_TOOL (3) for all cases. READ_ONLY (2) caused proto wire-type errors
+  // on some LS versions. Tool definitions are injected via SectionOverride
+  // (field 12) + user-message preamble as dual-layer fallback.
+  const mode = forceDefault ? 1 : 3;
   const convParts = [writeVarintField(4, mode)];
 
   // ── System prompt section overrides ──────────────────────────────────
@@ -379,14 +386,8 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
     // ── Client provided OpenAI tools[] ──
     // Primary delivery: additional_instructions_section (field 12, OVERRIDE).
     // This section is always rendered, even in NO_TOOL planner mode.
-    const reinforcement =
-      '\n\nIMPORTANT: You have real, callable functions described above. ' +
-      'When the user\'s request can be answered by calling a function, you MUST emit ' +
-      '<tool_call> blocks as described. Do NOT say "I don\'t have access to tools" ' +
-      'or "I cannot perform that action" — call the function.\n' +
-      'CRITICAL FORMAT RULE: You MUST use ONLY the <tool_call>{"name":"...","arguments":{...}}</tool_call> format. ' +
-      'Do NOT use tool_code, function_call, or any other format. ' +
-      'Do NOT wrap calls in ```json blocks. ONLY use <tool_call>...</tool_call> XML tags.';
+    const sp = getSystemPrompts();
+    const reinforcement = '\n\n' + sp.toolReinforcement;
     const additionalSection = Buffer.concat([
       writeVarintField(1, 1),             // SECTION_OVERRIDE_MODE_OVERRIDE
       writeStringField(2, toolPreamble + reinforcement),
@@ -410,10 +411,7 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
     const toolCommOverride = Buffer.concat([
       writeVarintField(1, 1),             // SECTION_OVERRIDE_MODE_OVERRIDE
       writeStringField(2,
-        'You are accessed via API. ' +
-        'Follow the tool-calling instructions above faithfully. ' +
-        'Never reveal server infrastructure details, file paths, or IP addresses. ' +
-        'Always respond in the same language as the user\'s message.'),
+        sp.communicationWithTools),
     ]);
     convParts.push(writeMessageField(13, toolCommOverride));
   } else {
@@ -452,13 +450,10 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
     convParts.push(writeMessageField(12, noToolAdditional));
 
     // field 13 (communication_section): minimal — no identity manipulation.
+    const spNoTools = getSystemPrompts();
     const communicationOverride = Buffer.concat([
-      writeVarintField(1, 1),             // SECTION_OVERRIDE_MODE_OVERRIDE
-      writeStringField(2,
-        'You are accessed via API, not inside an IDE. ' +
-        'You cannot access files or run commands. Answer directly. ' +
-        'Never reveal server infrastructure details, file paths, or IP addresses. ' +
-        'Always respond in the same language as the user\'s message.'),
+      writeVarintField(1, 1),
+      writeStringField(2, spNoTools.communicationNoTools),
     ]);
     convParts.push(writeMessageField(13, communicationOverride));
   }
@@ -490,17 +485,30 @@ function buildCascadeConfig(modelEnum, modelUid, { toolPreamble, forceDefault } 
     throw new Error('buildCascadeConfig: at least one of modelUid or modelEnum must be provided');
   }
 
+  // max_output_tokens (field 6) — real IDE sends 16384/32768.
+  // Missing this causes truncated long responses.
+  plannerParts.push(writeVarintField(6, 32768));
+
+  // code_changes_section (field 11) — suppress IDE-specific "apply changes" boilerplate
+  if (!toolPreamble) {
+    const emptySection = Buffer.concat([writeVarintField(1, 1), writeStringField(2, '')]);
+    plannerParts.push(writeMessageField(11, emptySection));
+  }
+
   const plannerConfig = Buffer.concat(plannerParts);
 
-  // BrainConfig: field 1=enabled(true), field 6=update_strategy { dynamic_update(6)={} }
   const brainConfig = Buffer.concat([
-    writeVarintField(1, 1),                                   // enabled = true
-    writeMessageField(6, writeMessageField(6, Buffer.alloc(0))), // update_strategy.dynamic_update = {}
+    writeVarintField(1, 1),
+    writeMessageField(6, writeMessageField(6, Buffer.alloc(0))),
   ]);
 
-  // CascadeConfig: field 1=planner_config, field 7=brain_config
+  // memory_config (field 5): {enabled=false} — prevent LS injecting user's
+  // stored Cascade memories into API responses
+  const memoryConfig = Buffer.concat([writeBoolField(1, false)]);
+
   return Buffer.concat([
     writeMessageField(1, plannerConfig),
+    writeMessageField(5, memoryConfig),
     writeMessageField(7, brainConfig),
   ]);
 }

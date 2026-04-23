@@ -41,9 +41,14 @@ const DEFAULTS = {
     // capacity. Adds one network round-trip per attempt so off by default.
     preflightRateLimit: false,
   },
-  // Per-provider identity prompt templates. Use {model} as the model-name
-  // placeholder. Edits from the dashboard are persisted here.
   identityPrompts: { ...DEFAULT_IDENTITY_PROMPTS },
+  // System-level prompt templates injected into Cascade proto fields.
+  // Editable from Dashboard so users can tune without code changes.
+  systemPrompts: {
+    toolReinforcement: 'The functions listed above are available and callable. When the user\'s request can be answered by calling a function, emit a <tool_call> block as described. Use this exact format: <tool_call>{"name":"...","arguments":{...}}</tool_call>',
+    communicationWithTools: 'You are accessed via API. Respond in the same language as the user. Use the functions above when relevant.',
+    communicationNoTools: 'You are accessed via API. Answer directly. Respond in the same language as the user.',
+  },
 };
 
 function deepMerge(base, override) {
@@ -124,6 +129,29 @@ export function setIdentityPrompts(patch) {
   _state.identityPrompts = current;
   persist();
   return getIdentityPrompts();
+}
+
+export function getSystemPrompts() {
+  return { ...DEFAULTS.systemPrompts, ...(_state.systemPrompts || {}) };
+}
+
+export function setSystemPrompts(patch) {
+  if (!patch || typeof patch !== 'object') return getSystemPrompts();
+  const current = _state.systemPrompts || {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (typeof v !== 'string') continue;
+    current[k] = v.trim();
+  }
+  _state.systemPrompts = current;
+  persist();
+  return getSystemPrompts();
+}
+
+export function resetSystemPrompt(key) {
+  if (key && _state.systemPrompts) delete _state.systemPrompts[key];
+  else _state.systemPrompts = {};
+  persist();
+  return getSystemPrompts();
 }
 
 export function resetIdentityPrompt(provider) {

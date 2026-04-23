@@ -15,7 +15,7 @@ import { restartLsForProxy } from '../langserver.js';
 import { getLsStatus, stopLanguageServer, startLanguageServer, isLanguageServerRunning } from '../langserver.js';
 import { getStats, resetStats, recordRequest } from './stats.js';
 import { cacheStats, cacheClear } from '../cache.js';
-import { getExperimental, setExperimental, getIdentityPrompts, setIdentityPrompts, resetIdentityPrompt, DEFAULT_IDENTITY_PROMPTS } from '../runtime-config.js';
+import { getExperimental, setExperimental, getIdentityPrompts, setIdentityPrompts, resetIdentityPrompt, DEFAULT_IDENTITY_PROMPTS, getSystemPrompts, setSystemPrompts, resetSystemPrompt } from '../runtime-config.js';
 import { poolStats as convPoolStats, poolClear as convPoolClear } from '../conversation-pool.js';
 import { getLogs, subscribeToLogs, unsubscribeFromLogs } from './logger.js';
 import { getProxyConfigMasked, setGlobalProxy, setAccountProxy, removeProxy, prepareEffectiveProxy } from './proxy-config.js';
@@ -48,8 +48,8 @@ function checkAuth(req) {
     } catch {}
   }
   if (config.dashboardPassword) return pw === config.dashboardPassword;
-  if (config.apiKey) return pw === config.apiKey;
-  return true;  // No password and no API key = open access
+  if (config.apiKey) return !pw || pw === config.apiKey;
+  return true;
 }
 
 function parseBulkLoginText(text) {
@@ -188,6 +188,20 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
   if (subpath.match(/^\/identity-prompts\/[^/]+$/) && method === 'DELETE') {
     const provider = subpath.split('/').pop();
     const prompts = resetIdentityPrompt(provider);
+    return json(res, 200, { success: true, prompts });
+  }
+
+  // ─── System prompts (tool reinforcement, communication) ──
+  if (subpath === '/system-prompts' && method === 'GET') {
+    return json(res, 200, { prompts: getSystemPrompts() });
+  }
+  if (subpath === '/system-prompts' && method === 'PUT') {
+    const prompts = setSystemPrompts(body || {});
+    return json(res, 200, { success: true, prompts });
+  }
+  if (subpath.match(/^\/system-prompts\/[^/]+$/) && method === 'DELETE') {
+    const key = subpath.split('/').pop();
+    const prompts = resetSystemPrompt(key);
     return json(res, 200, { success: true, prompts });
   }
 
@@ -778,6 +792,70 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
         failCount: results.length - successCount,
         results,
       });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
+    }
+  }
+
+  // ─── Batch proxy + account import ─────────────────────
+  // POST /batch-import — each line: "proxy email password" or "email password"
+  if (subpath === '/batch-import' && method === 'POST') {
+    try {
+      const { text, autoAdd = true } = body || {};
+      if (!text || typeof text !== 'string') return json(res, 400, { error: '缺少 text 字段' });
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      if (!lines.length) return json(res, 400, { error: '没有有效行' });
+
+      const results = [];
+      for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
+        const parts = line.split(/\s+/);
+        let proxySpec = '', email = '', password = '';
+        if (parts.length >= 3 && (parts[0].includes('://') || /^[^@\s]+:\d+$/.test(parts[0]) || /@[^:\s]+:\d+$/.test(parts[0]))) {
+          proxySpec = parts[0];
+          email = parts[1];
+          password = parts.slice(2).join(' ');
+        } else if (parts.length >= 2) {
+          email = parts[0];
+          password = parts.slice(1).join(' ');
+        } else {
+          results.push({ line: index + 1, success: false, email: line.slice(0, 30), error: '格式错误，需要 [proxy] email password' });
+          continue;
+        }
+
+        let loginProxy = null;
+        if (proxySpec) {
+          const proxyParts = proxySpec.match(/^(?:(\w+):\/\/)?(?:([^:]+):([^@]+)@)?([^:]+):(\d+)$/);
+          if (!proxyParts) {
+            results.push({ line: index + 1, success: false, email, error: '代理格式错误，需要 protocol://host:port 或 host:port' });
+            continue;
+          }
+          loginProxy = {
+            type: (proxyParts[1] || 'http').toLowerCase(),
+            host: proxyParts[4],
+            port: parseInt(proxyParts[5], 10),
+            username: proxyParts[2] || '',
+            password: proxyParts[3] || '',
+          };
+        }
+
+        try {
+          const result = await processWindsurfLogin({ email, password, loginProxy, autoAdd });
+          results.push({ line: index + 1, proxy: proxySpec, ...result });
+        } catch (err) {
+          results.push({
+            line: index + 1,
+            proxy: proxySpec,
+            success: false,
+            email,
+            error: err.message,
+            isAuthFail: !!err.isAuthFail,
+            firebaseCode: err.firebaseCode || '',
+          });
+        }
+      }
+      const successCount = results.filter(r => r.success).length;
+      return json(res, 200, { success: true, total: results.length, successCount, failCount: results.length - successCount, results });
     } catch (err) {
       return json(res, 400, { error: err.message });
     }

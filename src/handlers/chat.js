@@ -168,6 +168,7 @@ async function waitForAccount(tried, signal, maxWaitMs = QUEUE_MAX_WAIT_MS, mode
 }
 
 export async function handleChatCompletions(body) {
+  const reqId = Math.random().toString(36).slice(2, 8);
   const {
     model: reqModel,
     stream = false,
@@ -294,7 +295,7 @@ export async function handleChatCompletions(body) {
   const reuseEnabled = useCascade && isExperimentalEnabled('cascadeConversationReuse');
   const fpBefore = reuseEnabled ? fingerprintBefore(messages, modelKey) : null;
   let reuseEntry = reuseEnabled ? poolCheckout(fpBefore) : null;
-  if (reuseEntry) log.info(`Chat: cascade reuse HIT cascadeId=${reuseEntry.cascadeId.slice(0, 8)}… model=${displayModel}`);
+  if (reuseEntry) log.info(`Chat[${reqId}]: reuse HIT cascade=${reuseEntry.cascadeId.slice(0, 8)} model=${displayModel}`);
 
   // Non-stream: retry with a different account on model-not-available errors
   const tried = [];
@@ -336,7 +337,7 @@ export async function handleChatCompletions(body) {
             acct = acquireAccountByKey(reuseEntry.apiKey, modelKey);
           }
           if (!acct) {
-            log.info('Chat: cascade reuse skipped — owning account not available after 5s wait');
+            log.info(`Chat[${reqId}]: reuse MISS — owning account not available after 5s wait`);
             reuseEntry = null;
           }
         }
@@ -376,14 +377,14 @@ export async function handleChatCompletions(body) {
         // Cascade pins cascade_id to a specific LS port too; if the LS it was
         // born on has been replaced, the cascade_id is dead.
         if (reuseEntry && reuseEntry.lsPort !== ls.port) {
-          log.info('Chat: cascade reuse skipped — LS port changed');
+          log.info(`Chat[${reqId}]: reuse MISS — LS port changed`);
           reuseEntry = null;
         }
         const _msgChars = (messages || []).reduce((n, m) => {
           const c = m?.content;
           return n + (typeof c === 'string' ? c.length : Array.isArray(c) ? c.reduce((k, p) => k + (typeof p?.text === 'string' ? p.text.length : 0), 0) : 0);
         }, 0);
-        log.info(`Chat: model=${displayModel} flow=${useCascade ? 'cascade' : 'legacy'} attempt=${attempt + 1} account=${acct.email} ls=${ls.port} turns=${(messages||[]).length} chars=${_msgChars}${reuseEntry ? ' reuse=1' : ''}${emulateTools ? ' tools=emu' : ''}`);
+        log.info(`Chat[${reqId}]: model=${displayModel} flow=${useCascade ? 'cascade' : 'legacy'} attempt=${attempt + 1} account=${acct.email} ls=${ls.port} turns=${(messages||[]).length} chars=${_msgChars}${reuseEntry ? ' reuse=1' : ''}${emulateTools ? ' tools=emu' : ''}`);
         const client = new WindsurfClient(acct.apiKey, ls.port, ls.csrfToken);
         const result = await nonStreamResponse(
           client, chatId, created, displayModel, modelKey, messages, cascadeMessages, modelEnum, modelUid,
@@ -802,7 +803,7 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
                 acct = acquireAccountByKey(reuseEntry.apiKey, modelKey);
               }
               if (!acct) {
-                log.info('Chat: cascade reuse skipped — owning account not available after 5s wait');
+                log.info(`Chat[${reqId}]: reuse MISS — owning account not available after 5s wait`);
                 reuseEntry = null;
               }
             }
@@ -819,7 +820,6 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
             : await getSharedRequestProxy({ refresh: retrySwitchEnabled && attempt > 0 });
           acct.proxy = leasedProxy.proxy || null;
           let clashStreamGuardToken = '';
-
           try {
             if (acct.proxy?.source === 'clash' && leasedProxy !== sharedRequestProxy) {
               clashStreamGuardToken = acquireClashStreamGuard({ accountId: acct.id, modelKey, reason: 'chat_stream' });
@@ -844,14 +844,14 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
             const ls = getLsFor(acct.proxy);
             if (!ls) { lastErr = new Error('No LS instance available'); break; }
             if (reuseEntry && reuseEntry.lsPort !== ls.port) {
-              log.info('Chat: cascade reuse skipped — LS port changed');
+              log.info(`Chat[${reqId}]: reuse MISS — LS port changed`);
               reuseEntry = null;
             }
             const _msgCharsStream = (messages || []).reduce((n, m) => {
               const c = m?.content;
               return n + (typeof c === 'string' ? c.length : Array.isArray(c) ? c.reduce((k, p) => k + (typeof p?.text === 'string' ? p.text.length : 0), 0) : 0);
             }, 0);
-            log.info(`Chat: model=${model} flow=${useCascade ? 'cascade' : 'legacy'} stream=true attempt=${attempt + 1} account=${acct.email} ls=${ls.port} turns=${(messages||[]).length} chars=${_msgCharsStream}${reuseEntry ? ' reuse=1' : ''}`);
+            log.info(`Chat[${reqId}]: model=${model} flow=${useCascade ? 'cascade' : 'legacy'} stream=true attempt=${attempt + 1} account=${acct.email} ls=${ls.port} turns=${(messages||[]).length} chars=${_msgCharsStream}${reuseEntry ? ' reuse=1' : ''}`);
             const client = new WindsurfClient(acct.apiKey, ls.port, ls.csrfToken);
             let cascadeResult = null;
             if (useCascade) {
