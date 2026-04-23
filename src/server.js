@@ -124,40 +124,14 @@ function maybeRecordJsonClientError(res, status, body) {
   });
 }
 
-function buildCorsHeaders(req) {
-  const allowHeaders = new Map();
-  const requested = String(req?.headers['access-control-request-headers'] || '')
-    .split(',')
-    .map(v => v.trim())
-    .filter(Boolean);
-  for (const name of [
-    'Content-Type',
-    'Authorization',
-    'X-API-Key',
-    'X-Dashboard-Password',
-    'Anthropic-Version',
-    'Anthropic-Beta',
-    'OpenAI-Beta',
-    ...requested,
-  ]) {
-    const value = String(name || '').trim();
-    if (!value) continue;
-    const key = value.toLowerCase();
-    if (!allowHeaders.has(key)) allowHeaders.set(key, value);
-  }
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': Array.from(allowHeaders.values()).join(', '),
-  };
-}
-
 function json(res, status, body) {
   maybeRecordJsonClientError(res, status, body);
   const data = JSON.stringify(maskErrorPayload(body));
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    ...(res.__corsHeaders || buildCorsHeaders()),
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   });
   res.end(data);
 }
@@ -167,7 +141,6 @@ async function route(req, res) {
   const path = req.url.split('?')[0];
   res.__requestPath = path;
   res.__requestMethod = method;
-  res.__corsHeaders = buildCorsHeaders(req);
 
   if (method === 'OPTIONS') return json(res, 204, '');
   if (path === '/' || path === '') {
@@ -359,7 +332,7 @@ async function route(req, res) {
 
     const result = await handleChatCompletions({ ...body, __clientRoute: '/v1/chat/completions' });
     if (result.stream) {
-      res.writeHead(result.status, { ...(res.__corsHeaders || buildCorsHeaders()), ...result.headers });
+      res.writeHead(result.status, { 'Access-Control-Allow-Origin': '*', ...result.headers });
       await result.handler(res);
     } else {
       json(res, result.status, result.body);
@@ -382,7 +355,7 @@ async function route(req, res) {
     }
     const result = await handleMessages({ ...body, __clientRoute: '/v1/messages' });
     if (result.stream) {
-      res.writeHead(result.status, { ...(res.__corsHeaders || buildCorsHeaders()), ...result.headers });
+      res.writeHead(result.status, { 'Access-Control-Allow-Origin': '*', ...result.headers });
       await result.handler(res);
     } else {
       json(res, result.status, result.body);

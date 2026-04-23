@@ -8,7 +8,6 @@
 
 import http from 'http';
 import https from 'https';
-import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { pathToFileURL } from 'url';
@@ -163,7 +162,6 @@ export class WindsurfClient {
     const wsId = this.apiKey.slice(0, 8).replace(/[^a-z0-9]/gi, 'x');
     const workspacePath = join(config.workspaceDir, `workspace-${wsId}`);
     const workspaceUri = pathToFileURL(workspacePath).href;
-    try { mkdirSync(workspacePath, { recursive: true }); } catch {}
 
     lsEntry.workspaceInit = (async () => {
       try {

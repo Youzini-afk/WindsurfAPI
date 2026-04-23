@@ -19,15 +19,36 @@ export const VERSION = (() => {
   } catch { return '1.0.0'; }
 })();
 
-async function bootstrapRuntime() {
+async function main() {
+  const banner = `
+   _    _ _           _                   __    _    ____ ___
+  | |  | (_)         | |                 / _|  / \\  |  _ \\_ _|
+  | |  | |_ _ __   __| |___ _   _ _ __ _| |_  / _ \\ | |_) | |
+  | |/\\| | | '_ \\ / _\` / __| | | | '__|_   _|/ ___ \\|  __/| |
+  \\  /\\  / | | | | (_| \\__ \\ |_| | |    |_| /_/   \\_\\_|  |___|
+   \\/  \\/|_|_| |_|\\__,_|___/\\__,_|_|
+                                          ${BRAND} v${VERSION}
+`;
+  console.log(banner);
+  console.log(`  OpenAI-compatible proxy for Windsurf — by dwgx1337\n`);
+
+  // Start language server binary.
+  // Auto-install if missing — users repeatedly miss the manual install step
+  // and open "request crashes" issues (see #18), so we just do it ourselves.
+  // Skipped on Windows (LS is Linux-only) and when install-ls.sh isn't present.
   const binaryPath = config.lsBinaryPath;
-
   try {
-    await initClash();
-  } catch (err) {
-    log.warn(`Clash init failed: ${err.message}`);
-  }
-
+    mkdirSync(config.appDataDir, { recursive: true });
+    mkdirSync(config.logDir, { recursive: true });
+    mkdirSync(config.clashDir, { recursive: true });
+    mkdirSync(config.windsurfDataDir, { recursive: true });
+    mkdirSync(join(config.windsurfDataDir, 'db'), { recursive: true });
+    mkdirSync(config.workspaceDir, { recursive: true });
+    for (const entry of readdirSync(config.workspaceDir)) {
+      rmSync(join(config.workspaceDir, entry), { recursive: true, force: true });
+    }
+  } catch {}
+  await initClash();
   if (!existsSync(binaryPath) && process.platform !== 'win32') {
     const scriptPath = (() => {
       try {
@@ -50,34 +71,26 @@ async function bootstrapRuntime() {
       }
     }
   }
-
   if (existsSync(binaryPath)) {
+    await startLanguageServer({
+      binaryPath,
+      port: config.lsPort,
+      apiServerUrl: config.codeiumApiUrl,
+    });
+
     try {
-      await startLanguageServer({
-        binaryPath,
-        port: config.lsPort,
-        apiServerUrl: config.codeiumApiUrl,
-      });
-      try {
-        await waitForReady(15000);
-      } catch (err) {
-        log.error(`Language server failed to start: ${err.message}`);
-        log.error('Chat completions will not work without the language server.');
-      }
+      await waitForReady(15000);
     } catch (err) {
-      log.error(`Language server bootstrap failed: ${err.message}`);
-      log.error('HTTP server is up, but chat completions will not work until the language server can start.');
+      log.error(`Language server failed to start: ${err.message}`);
+      log.error('Chat completions will not work without the language server.');
     }
   } else {
     log.warn(`Language server binary not found at ${binaryPath}`);
     log.warn('Install it with: download Windsurf Linux tarball and extract language_server_linux_x64');
   }
 
-  try {
-    await initAuth();
-  } catch (err) {
-    log.error(`Auth init failed: ${err.message}`);
-  }
+  // Init auth pool
+  await initAuth();
 
   if (!isAuthenticated()) {
     log.warn('No accounts configured. Add via:');
@@ -85,43 +98,7 @@ async function bootstrapRuntime() {
     log.warn('  POST /auth/login {"api_key":"..."}');
   }
 
-  log.info('Background bootstrap finished');
-}
-
-async function main() {
-  const banner = `
-   _    _ _           _                   __    _    ____ ___
-  | |  | (_)         | |                 / _|  / \\  |  _ \\_ _|
-  | |  | |_ _ __   __| |___ _   _ _ __ _| |_  / _ \\ | |_) | |
-  | |/\\| | | '_ \\ / _\` / __| | | | '__|_   _|/ ___ \\|  __/| |
-  \\  /\\  / | | | | (_| \\__ \\ |_| | |    |_| /_/   \\_\\_|  |___|
-   _    _ _           _                   __    _    ____ ___
-  | |  | (_)         | |                 / _|  / \\  |  _ \\_ _|
-  | |  | |_ _ __   __| |___ _   _ _ __ _| |_  / _ \\ | |_) | |
-  | |/\\| | | '_ \\ / _\` / __| | | | '__|_   _|/ ___ \\|  __/| |
-  \\  /\\  / | | | | (_| \\__ \\ |_| | |    |_| /_/   \\_\\_|  |___|
-                                          ${BRAND} v${VERSION}
-`;
-  console.log(banner);
-  console.log(`  OpenAI-compatible proxy for Windsurf — by dwgx1337\n`);
-
-  try {
-    mkdirSync(config.appDataDir, { recursive: true });
-    mkdirSync(config.logDir, { recursive: true });
-    mkdirSync(config.clashDir, { recursive: true });
-    mkdirSync(config.windsurfDataDir, { recursive: true });
-    mkdirSync(join(config.windsurfDataDir, 'db'), { recursive: true });
-    mkdirSync(config.workspaceDir, { recursive: true });
-    for (const entry of readdirSync(config.workspaceDir)) {
-      rmSync(join(config.workspaceDir, entry), { recursive: true, force: true });
-    }
-  } catch {}
-
   const server = startServer();
-  log.info('HTTP server bound; continuing runtime bootstrap in background');
-  bootstrapRuntime().catch(err => {
-    log.error(`Background bootstrap failed: ${err.stack || err.message}`);
-  });
 
   let shuttingDown = false;
   const shutdown = (signal) => {
