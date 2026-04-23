@@ -143,6 +143,10 @@ async function route(req, res) {
   res.__requestMethod = method;
 
   if (method === 'OPTIONS') return json(res, 204, '');
+  if (path === '/' || path === '') {
+    res.writeHead(302, { Location: '/dashboard/' });
+    return res.end();
+  }
   if (path === '/health') {
     const counts = getAccountCount();
     const clashStatus = getClashStatus();
