@@ -2344,7 +2344,7 @@ const App = {
 
   appendLoginHistory(entries) {
     const list = Array.isArray(entries) ? entries : [entries];
-    for (const entry of list) this.loginHistory.unshift(entry);
+    for (let i = list.length - 1; i >= 0; i--) this.loginHistory.unshift(list[i]);
     if (this.loginHistory.length > 50) this.loginHistory.length = 50;
     localStorage.setItem('wl_history', JSON.stringify(this.loginHistory));
     this.renderLoginHistory();
