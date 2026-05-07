@@ -1,5 +1,6 @@
 import net from 'node:net';
 import { lookup as dnsLookup } from 'node:dns';
+import { domainToASCII } from 'node:url';
 
 function ipv4ToInt(ip) {
   const parts = ip.split('.').map(n => Number(n));
@@ -76,7 +77,8 @@ export function isPrivateIp(address) {
       || ipv4InCidr(ip, '127.0.0.0', 8)
       || ipv4InCidr(ip, '169.254.0.0', 16)
       || ipv4InCidr(ip, '172.16.0.0', 12)
-      || ipv4InCidr(ip, '192.168.0.0', 16);
+      || ipv4InCidr(ip, '192.168.0.0', 16)
+      || ipv4InCidr(ip, '198.18.0.0', 15);
   }
   if (family === 6) {
     return ip === '::' || ip === '::1'
@@ -86,8 +88,22 @@ export function isPrivateIp(address) {
   return false;
 }
 
+function normalizeHostname(hostname) {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!host) throw new Error('Invalid hostname');
+  if (net.isIP(host)) return host;
+  const ascii = domainToASCII(host);
+  if (!ascii || ascii.length > 253) throw new Error('Invalid hostname');
+  const labels = ascii.split('.');
+  for (const label of labels) {
+    if (label.length < 1 || label.length > 63) throw new Error('Invalid hostname');
+    if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)) throw new Error('Invalid hostname');
+  }
+  return ascii;
+}
+
 export async function resolvePublicAddresses(hostname, lookupFn = dnsLookup) {
-  const host = String(hostname || '').replace(/^\[|\]$/g, '');
+  const host = normalizeHostname(hostname);
   if (!host || host.toLowerCase() === 'localhost') throw new Error('ERR_PROXY_PRIVATE_HOST');
   if (net.isIP(host)) {
     if (isPrivateIp(host)) throw new Error('ERR_PROXY_PRIVATE_IP');
@@ -104,8 +120,7 @@ export async function resolvePublicAddresses(hostname, lookupFn = dnsLookup) {
 }
 
 export async function validateHostFormat(hostname, lookupFn = dnsLookup) {
-  const host = String(hostname || '').replace(/^\[|\]$/g, '');
-  if (!host) throw new Error('ERR_INVALID_HOST');
+  const host = normalizeHostname(hostname);
   if (net.isIP(host)) {
     return [{ address: host, family: net.isIP(host) }];
   }

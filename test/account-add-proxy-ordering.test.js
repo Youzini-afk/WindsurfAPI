@@ -159,7 +159,7 @@ describe('POST /accounts proxy ordering (regression for PR #90 follow-up)', () =
     await handleDashboardApi(
       'POST',
       '/accounts',
-      { api_key: key, label, proxy: 'http://does-not-exist.invalid:8080' },
+      { api_key: key, label, proxy: 'http://bad_host.invalid:8080' },
       { headers: {}, socket: { remoteAddress: '127.0.0.1' } },
       res
     );

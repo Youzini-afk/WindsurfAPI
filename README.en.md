@@ -114,6 +114,33 @@ Default mounts:
 
 If you want a different persistence location, set `DATA_DIR` in `.env`. The Docker setup defaults it to `/data`.
 
+### Zeabur Deployment
+
+Use the repository `Dockerfile` directly on Zeabur. You do not need `docker-compose.yml`.
+
+1. Create a Zeabur Service from your Git repository. If you pushed the parent `wind2api` directory, set Root Directory to `WindsurfAPI`.
+2. Suggested environment variables:
+
+```bash
+# Zeabur injects PORT automatically; do not hard-code it.
+API_KEY=use-a-strong-random-secret
+DASHBOARD_PASSWORD=use-a-strong-password
+DATA_DIR=/data
+LS_BINARY_PATH=/opt/windsurf/language_server_linux_x64
+LS_PORT=42100
+
+# Choose one, or add accounts from the Dashboard after deployment.
+CODEIUM_API_KEY=
+CODEIUM_AUTH_TOKEN=
+```
+
+3. Mount volumes:
+
+- `/data`: required for accounts, Dashboard settings, stats, and logs
+- `/opt/windsurf`: recommended so the auto-downloaded Language Server survives redeploys
+
+After deployment, check `https://YOUR_DOMAIN/health`, then open `https://YOUR_DOMAIN/dashboard` to add accounts. Do not enable the Dashboard Docker self-update flow on Zeabur; redeploy from Zeabur when you update the code.
+
 ### One-Click Update
 
 To pull the latest fixes after deployment, just run one command:

@@ -4,8 +4,8 @@ import { isPrivateIp, resolvePublicAddresses } from '../src/net-safety.js';
 import { parseGenericDataUrl } from '../src/image.js';
 
 describe('SSRF private address detection', () => {
-  it('blocks IPv4 private, loopback, link-local, and carrier-grade NAT ranges', () => {
-    for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.1', '169.254.1.1', '100.64.0.1']) {
+  it('blocks IPv4 private, loopback, link-local, carrier-grade NAT, and benchmarking ranges', () => {
+    for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.1', '169.254.1.1', '100.64.0.1', '198.18.1.1']) {
       assert.equal(isPrivateIp(ip), true, ip);
     }
     assert.equal(isPrivateIp('8.8.8.8'), false);
@@ -21,6 +21,10 @@ describe('SSRF private address detection', () => {
   it('rejects hostnames after DNS resolution to private IPs', async () => {
     const lookup = (host, opts, cb) => cb(null, [{ address: '127.0.0.1', family: 4 }]);
     await assert.rejects(() => resolvePublicAddresses('evil.example', lookup), /ERR_PROXY_PRIVATE_IP/);
+  });
+
+  it('rejects invalid hostnames before DNS lookup', async () => {
+    await assert.rejects(() => resolvePublicAddresses('bad_host.invalid'), /Invalid hostname/);
   });
 
   it('rejects oversized generic data URLs', () => {

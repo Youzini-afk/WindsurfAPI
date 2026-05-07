@@ -1,7 +1,7 @@
 FROM node:20-bookworm-slim
 
 ENV NODE_ENV=production \
-    PORT=3003 \
+    PORT=8080 \
     DATA_DIR=/data \
     LS_BINARY_PATH=/opt/windsurf/language_server_linux_x64 \
     LS_PORT=42100
@@ -9,7 +9,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash curl ca-certificates \
+    && apt-get install -y --no-install-recommends bash curl ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json ./
@@ -20,11 +20,12 @@ RUN sed -i 's/\r$//' install-ls.sh setup.sh \
     && chmod +x install-ls.sh setup.sh \
     && mkdir -p /data /opt/windsurf/data/db /tmp/windsurf-workspace
 
-EXPOSE 3003
+EXPOSE 8080
 
 VOLUME ["/data", "/opt/windsurf", "/tmp/windsurf-workspace"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 3003) + '/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 8080) + '/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
+ENTRYPOINT ["tini", "--"]
 CMD ["node", "src/index.js"]

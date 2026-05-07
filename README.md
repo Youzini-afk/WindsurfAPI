@@ -112,6 +112,33 @@ docker compose logs -f
 
 如果想改持久化目录，可在 `.env` 里设置 `DATA_DIR`。Docker 默认已设为 `/data`。
 
+### Zeabur 部署
+
+推荐直接让 Zeabur 用本仓库里的 `Dockerfile` 构建，不需要 `docker-compose.yml`。
+
+1. 在 Zeabur 新建 Service，选择 Git Repository。如果你推的是 `wind2api` 这个父目录，Root Directory 设为 `WindsurfAPI`。
+2. 环境变量建议这样配：
+
+```bash
+# Zeabur 会自动注入 PORT，不要手动写死
+API_KEY=换成一个强随机密钥
+DASHBOARD_PASSWORD=换成一个强密码
+DATA_DIR=/data
+LS_BINARY_PATH=/opt/windsurf/language_server_linux_x64
+LS_PORT=42100
+
+# 二选一，也可以部署后在 Dashboard 里添加账号
+CODEIUM_API_KEY=
+CODEIUM_AUTH_TOKEN=
+```
+
+3. 挂载 Volume：
+
+- `/data`：必须，保存账号、Dashboard 设置、统计和日志
+- `/opt/windsurf`：推荐，保存自动下载的 Language Server，减少重部署冷启动时间
+
+部署完成后先打开 `https://你的域名/health` 看状态，再进 `https://你的域名/dashboard` 添加账号。Zeabur 上不要开启 Dashboard 的 Docker 一键更新；更新代码后用 Zeabur 重新部署即可。
+
 ### 一键更新
 
 部署过之后要拉最新修复，一条命令搞定：
