@@ -700,10 +700,16 @@ export function neutralizeCascadeIdentity(text, modelName) {
   const provider = MODEL_PROVIDERS[Object.keys(MODEL_PROVIDERS).find(k => modelName.toLowerCase().startsWith(k)) || ''];
   if (!provider) return text;
   return text
+    // Chinese identity leaks from Cascade's baked-in planner prompt
+    .replace(/我是\s*Cascade[，,]\s*一个由\s*(?:Windsurf|Codeium)\s*提供的\s*AI\s*编程助手/g, `我是 ${modelName}，一个由 ${provider} 提供的 AI 助手`)
+    .replace(/Cascade\s*是一个由\s*(?:Windsurf|Codeium)\s*提供的\s*AI\s*编程助手/g, `${modelName} 是一个由 ${provider} 提供的 AI 助手`)
+    .replace(/作为\s*Cascade/g, `作为 ${modelName}`)
     // First-person identity claims
     .replace(/\bI am Cascade\b/gi, `I am ${modelName}`)
     .replace(/\bI'm Cascade\b/gi, `I'm ${modelName}`)
     .replace(/\bmy name is Cascade\b/gi, `my name is ${modelName}`)
+    .replace(/我是\s*Cascade/g, `我是 ${modelName}`)
+    .replace(/我的名字是\s*Cascade/g, `我的名字是 ${modelName}`)
     // Third-person self-reference common in Cascade prose
     .replace(/\bCascade, an AI coding assistant\b/gi, `${modelName}, an AI assistant`)
     .replace(/\bCascade is an? (?:AI )?(?:coding )?assistant\b/gi, `${modelName} is an AI assistant`)
@@ -714,6 +720,7 @@ export function neutralizeCascadeIdentity(text, modelName) {
     .replace(/\bdeveloped by (?:Codeium|Windsurf)\b/gi, `developed by ${provider}`)
     .replace(/\bcreated by (?:Codeium|Windsurf)\b/gi, `created by ${provider}`)
     .replace(/\bbuilt by (?:Codeium|Windsurf)\b/gi, `built by ${provider}`)
+    .replace(/由\s*(?:Windsurf|Codeium)\s*(?:提供|开发|创建|构建)/g, `由 ${provider} 提供`)
     // Cascade-flavoured workspace narration. The model regularly says things
     // like "Cascade's workspace at /tmp/windsurf-workspace" — sanitizeText
     // already scrubs the path; this strips the lingering "Cascade's" /
@@ -2360,7 +2367,7 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
     if (wantJson && allText) {
       allText = stabilizeJsonPayload(allText, messages);
     }
-    allThinking = sanitizeText(allThinking);
+    allThinking = neutralizeCascadeIdentity(sanitizeText(allThinking), model);
     if (toolCalls.length) {
       toolCalls = toolCalls.map(tc => sanitizeToolCall(repairToolCallArguments(tc, messages)));
     }
@@ -2640,18 +2647,20 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
         try {
           send({ id, object: 'chat.completion.chunk', created, model,
             choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
-          if (cached.thinking) {
+          const cachedThinking = neutralizeCascadeIdentity(cached.thinking || '', model);
+          const cachedText = neutralizeCascadeIdentity(cached.text || '', model);
+          if (cachedThinking) {
             send({ id, object: 'chat.completion.chunk', created, model,
-              choices: [{ index: 0, delta: { reasoning_content: cached.thinking }, finish_reason: null }] });
+              choices: [{ index: 0, delta: { reasoning_content: cachedThinking }, finish_reason: null }] });
           }
-          if (cached.text) {
+          if (cachedText) {
             send({ id, object: 'chat.completion.chunk', created, model,
-              choices: [{ index: 0, delta: { content: cached.text }, finish_reason: null }] });
+              choices: [{ index: 0, delta: { content: cachedText }, finish_reason: null }] });
           }
           send({ id, object: 'chat.completion.chunk', created, model,
             choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
           send({ id, object: 'chat.completion.chunk', created, model,
-            choices: [], usage: cachedUsage(messages, cached.text) });
+            choices: [], usage: cachedUsage(messages, cachedText) });
           if (!res.writableEnded) { res.write('data: [DONE]\n\n'); res.end(); }
         } finally {
           unregisterSse();
@@ -2725,6 +2734,7 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
 
       const emitContent = (clean) => {
         if (!clean) return;
+        clean = neutralizeCascadeIdentity(clean, model);
         accText += clean;
         // When response_format=json_object/json_schema is set, buffer text
         // instead of streaming it out. We can't safely fence-strip in the
@@ -2736,6 +2746,7 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
       };
       const emitThinking = (clean) => {
         if (!clean) return;
+        clean = neutralizeCascadeIdentity(clean, model);
         accThinking += clean;
         send({ id, object: 'chat.completion.chunk', created, model,
           choices: [{ index: 0, delta: { reasoning_content: clean }, finish_reason: null }] });

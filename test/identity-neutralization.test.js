@@ -68,6 +68,21 @@ describe('neutralizeCascadeIdentity', () => {
     );
   });
 
+  it('rewrites Chinese Cascade identity leaks', () => {
+    assert.equal(
+      neutralizeCascadeIdentity('我是 Cascade，一个由 Windsurf 提供的 AI 编程助手。', model),
+      `我是 ${model}，一个由 Anthropic 提供的 AI 助手。`
+    );
+    assert.equal(
+      neutralizeCascadeIdentity('Cascade 是一个由 Codeium 提供的 AI 编程助手。', model),
+      `${model} 是一个由 Anthropic 提供的 AI 助手。`
+    );
+    assert.equal(
+      neutralizeCascadeIdentity('作为 Cascade，我可以帮你。', model),
+      `作为 ${model}，我可以帮你。`
+    );
+  });
+
   it('rewrites Cascade workspace narration', () => {
     assert.equal(
       neutralizeCascadeIdentity("Let me check Cascade's workspace.", model),
