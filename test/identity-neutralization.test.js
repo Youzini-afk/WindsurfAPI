@@ -8,9 +8,9 @@ import { neutralizeCascadeIdentity } from '../src/handlers/chat.js';
 // expecting Anthropic-equivalent output) must not see those leaks.
 //
 // neutralizeCascadeIdentity rewrites the most common Cascade-isms back to
-// the requested model identity. Patterns are deliberately conservative:
-// only obvious self-reference is rewritten — generic mentions of the word
-// "cascade" in user code or technical prose are left alone.
+// the requested model identity, then removes any leftover standalone
+// Windsurf/Cascade brand tokens case-insensitively. The final scrub uses
+// word boundaries so longer identifiers like WindsurfAPI are not truncated.
 
 describe('neutralizeCascadeIdentity', () => {
   const model = 'claude-opus-4-7';
@@ -94,14 +94,25 @@ describe('neutralizeCascadeIdentity', () => {
     );
   });
 
-  it('leaves unrelated text unchanged', () => {
-    const text = 'The waterfall flows down a cascade of rocks.';
+  it('scrubs leftover Windsurf/Cascade tokens case-insensitively', () => {
+    assert.equal(
+      neutralizeCascadeIdentity('Leftover CASCADE and windsurf tokens.', model),
+      'Leftover and tokens.'
+    );
+    assert.equal(
+      neutralizeCascadeIdentity('Cascade, Windsurf, and windSurf are gone.', model),
+      ',, and are gone.'
+    );
+  });
+
+  it('does not truncate longer identifiers containing the brand tokens', () => {
+    const text = 'WindsurfAPI and useCascadeFlag should stay intact.';
     assert.equal(neutralizeCascadeIdentity(text, model), text);
   });
 
-  it('returns text unchanged when modelName has no known provider mapping', () => {
-    const text = 'I am Cascade.';
-    assert.equal(neutralizeCascadeIdentity(text, 'mystery-model'), text);
+  it('still applies brand scrub when modelName has no known provider mapping', () => {
+    assert.equal(neutralizeCascadeIdentity('I am Cascade.', 'mystery-model'), 'I am.');
+    assert.equal(neutralizeCascadeIdentity('WindsurfAPI stays.', 'mystery-model'), 'WindsurfAPI stays.');
   });
 
   it('returns falsy inputs unchanged', () => {

@@ -695,11 +695,19 @@ const MODEL_PROVIDERS = {
   o3: 'OpenAI', o4: 'OpenAI',
 };
 
+function scrubCascadeBrandTokens(text) {
+  if (typeof text !== 'string' || !text) return text;
+  return text
+    .replace(/\b(?:Windsurf|Cascade)\b/gi, '')
+    .replace(/[ \t]+([,.;:!?，。！？、])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
 export function neutralizeCascadeIdentity(text, modelName) {
   if (!text || !modelName) return text;
   const provider = MODEL_PROVIDERS[Object.keys(MODEL_PROVIDERS).find(k => modelName.toLowerCase().startsWith(k)) || ''];
-  if (!provider) return text;
-  return text
+  if (!provider) return scrubCascadeBrandTokens(text);
+  return scrubCascadeBrandTokens(text
     // Chinese identity leaks from Cascade's baked-in planner prompt
     .replace(/我是\s*Cascade[，,]\s*一个由\s*(?:Windsurf|Codeium)\s*提供的\s*AI\s*编程助手/g, `我是 ${modelName}，一个由 ${provider} 提供的 AI 助手`)
     .replace(/Cascade\s*是一个由\s*(?:Windsurf|Codeium)\s*提供的\s*AI\s*编程助手/g, `${modelName} 是一个由 ${provider} 提供的 AI 助手`)
@@ -727,7 +735,7 @@ export function neutralizeCascadeIdentity(text, modelName) {
     // "the Cascade" prefix so the sentence reads naturally. The leading
     // "the " is consumed by the same regex so we don't end up with the
     // double-article artefact ("the the workspace").
-    .replace(/\b(?:the )?Cascade(?:['’]s)? workspace\b/gi, 'the workspace');
+    .replace(/\b(?:the )?Cascade(?:['’]s)? workspace\b/gi, 'the workspace'));
 }
 
 function maybeNeutralizeCascadeIdentity(text, modelName) {
