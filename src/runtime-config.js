@@ -41,6 +41,14 @@ const DEFAULTS = {
     // the container). Default OFF — only useful for self-hosted boxes
     // that mount /var/run/docker.sock and run via docker-compose.
     autoUpdateQuietWindow: false,
+    // Built-in prompt behavior switches. Defaults preserve the historical
+    // behavior; operators running plain text chat can turn these off from
+    // the dashboard to keep Cascade's prompt surface lighter.
+    noToolGuardPrompt: true,
+    communicationSectionPrompt: true,
+    toolReinforcementPrompt: true,
+    jsonResponseHint: true,
+    identityNeutralization: true,
   },
   // v2.0.67 (#112) — Tunables for the quiet-window auto-updater.
   // Not under `experimental` because they're not boolean flags.

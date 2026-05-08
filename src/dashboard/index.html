@@ -2264,6 +2264,66 @@ window._firebaseOAuth = async function(provider) {
     <div class="section" style="margin-top:24px">
       <div class="section-header">
         <div>
+          <div class="section-title" data-i18n="section.promptToggles.title">内置提示词开关</div>
+          <div class="section-desc" data-i18n="section.promptToggles.desc">控制是否注入内置提示词与输出身份清理。默认全部开启以保持兼容；文字聊天场景可以按需关闭来减轻 prompt。</div>
+        </div>
+      </div>
+      <div class="section-body" style="display:grid;gap:12px">
+        <div style="display:flex;align-items:center;gap:16px;padding:12px;background:var(--surface-2);border-radius:var(--radius)">
+          <label class="switch">
+            <input type="checkbox" id="exp-no-tool-guard-prompt" onchange="App.toggleExperimental('noToolGuardPrompt', this.checked)">
+            <span class="switch-slider"></span>
+          </label>
+          <div>
+            <div style="font-weight:500" data-i18n="section.promptToggles.noToolGuard.title">无工具防幻觉提示</div>
+            <div class="text-sm text-muted" data-i18n="section.promptToggles.noToolGuard.desc">控制「No tools are available」和普通聊天模式约束。关闭后无工具请求更轻，但模型可能更容易叙述不存在的文件/工具动作。</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;padding:12px;background:var(--surface-2);border-radius:var(--radius)">
+          <label class="switch">
+            <input type="checkbox" id="exp-communication-section-prompt" onchange="App.toggleExperimental('communicationSectionPrompt', this.checked)">
+            <span class="switch-slider"></span>
+          </label>
+          <div>
+            <div style="font-weight:500" data-i18n="section.promptToggles.communication.title">通信区提示词</div>
+            <div class="text-sm text-muted" data-i18n="section.promptToggles.communication.desc">控制有工具/无工具时的 communication_section 模板，也就是下面两个通信指令是否注入。</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;padding:12px;background:var(--surface-2);border-radius:var(--radius)">
+          <label class="switch">
+            <input type="checkbox" id="exp-tool-reinforcement-prompt" onchange="App.toggleExperimental('toolReinforcementPrompt', this.checked)">
+            <span class="switch-slider"></span>
+          </label>
+          <div>
+            <div style="font-weight:500" data-i18n="section.promptToggles.toolReinforcement.title">工具调用格式强化</div>
+            <div class="text-sm text-muted" data-i18n="section.promptToggles.toolReinforcement.desc">控制工具列表后追加的 tool_call 格式说明。工具调用客户端建议开启；纯文字聊天可以关闭。</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;padding:12px;background:var(--surface-2);border-radius:var(--radius)">
+          <label class="switch">
+            <input type="checkbox" id="exp-json-response-hint" onchange="App.toggleExperimental('jsonResponseHint', this.checked)">
+            <span class="switch-slider"></span>
+          </label>
+          <div>
+            <div style="font-weight:500" data-i18n="section.promptToggles.jsonHint.title">JSON 响应提示</div>
+            <div class="text-sm text-muted" data-i18n="section.promptToggles.jsonHint.desc">控制检测到 response_format 或明确 JSON 请求时追加的 JSON-only 系统提示。</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;padding:12px;background:var(--surface-2);border-radius:var(--radius)">
+          <label class="switch">
+            <input type="checkbox" id="exp-identity-neutralization" onchange="App.toggleExperimental('identityNeutralization', this.checked)">
+            <span class="switch-slider"></span>
+          </label>
+          <div>
+            <div style="font-weight:500" data-i18n="section.promptToggles.identityNeutralization.title">Cascade 身份输出清理</div>
+            <div class="text-sm text-muted" data-i18n="section.promptToggles.identityNeutralization.desc">控制响应文本里的 Cascade/Windsurf 自称替换。关闭后不会改写模型原始输出。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="section" style="margin-top:24px">
+      <div class="section-header">
+        <div>
           <div class="section-title" data-i18n="section.systemPrompts.title">系统提示词</div>
           <div class="section-desc" data-i18n="section.systemPrompts.desc">工具注入、对话模式等内置提示词模板。修改后立即生效，点"重置"恢复默认。</div>
         </div>
@@ -5317,6 +5377,17 @@ docker compose up -d --force-recreate</pre>
     // v2.0.70 (#112 follow-up) — quiet-window auto-update toggle.
     const cbQw = document.getElementById('exp-quiet-window');
     if (cbQw) cbQw.checked = !!d.flags?.autoUpdateQuietWindow;
+    const promptToggleIds = {
+      noToolGuardPrompt: 'exp-no-tool-guard-prompt',
+      communicationSectionPrompt: 'exp-communication-section-prompt',
+      toolReinforcementPrompt: 'exp-tool-reinforcement-prompt',
+      jsonResponseHint: 'exp-json-response-hint',
+      identityNeutralization: 'exp-identity-neutralization'
+    };
+    for (const [flag, id] of Object.entries(promptToggleIds)) {
+      const el = document.getElementById(id);
+      if (el) el.checked = !!d.flags?.[flag];
+    }
     this.loadQuietWindowStatus();
     // Reflect current skin cookie in the dropdown so reload state is visible.
     const skinSel = document.getElementById('skin-select');

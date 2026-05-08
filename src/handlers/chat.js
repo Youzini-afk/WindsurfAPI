@@ -730,6 +730,12 @@ export function neutralizeCascadeIdentity(text, modelName) {
     .replace(/\b(?:the )?Cascade(?:['’]s)? workspace\b/gi, 'the workspace');
 }
 
+function maybeNeutralizeCascadeIdentity(text, modelName) {
+  return isExperimentalEnabled('identityNeutralization')
+    ? neutralizeCascadeIdentity(text, modelName)
+    : text;
+}
+
 /**
  * Lift authoritative environment facts from the caller's request so they
  * can be re-emitted into the proto-level tool_calling_section override.
@@ -1388,7 +1394,7 @@ async function _handleChatCompletionsInner(body, context = {}) {
 
   const explicitJson = isExplicitJsonRequested(messages);
   const wantJson = response_format?.type === 'json_object' || response_format?.type === 'json_schema' || explicitJson;
-  if (wantJson) {
+  if (wantJson && isExperimentalEnabled('jsonResponseHint')) {
     messages = applyJsonResponseHint(messages, response_format);
   }
 
@@ -2363,11 +2369,11 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
     // Scrub server-internal filesystem paths from everything we're about to
     // return. See src/sanitize.js for the patterns and rationale.
     allText = sanitizeText(allText);
-    allText = neutralizeCascadeIdentity(allText, model);
+    allText = maybeNeutralizeCascadeIdentity(allText, model);
     if (wantJson && allText) {
       allText = stabilizeJsonPayload(allText, messages);
     }
-    allThinking = neutralizeCascadeIdentity(sanitizeText(allThinking), model);
+    allThinking = maybeNeutralizeCascadeIdentity(sanitizeText(allThinking), model);
     if (toolCalls.length) {
       toolCalls = toolCalls.map(tc => sanitizeToolCall(repairToolCallArguments(tc, messages)));
     }
@@ -2647,8 +2653,8 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
         try {
           send({ id, object: 'chat.completion.chunk', created, model,
             choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
-          const cachedThinking = neutralizeCascadeIdentity(cached.thinking || '', model);
-          const cachedText = neutralizeCascadeIdentity(cached.text || '', model);
+          const cachedThinking = maybeNeutralizeCascadeIdentity(cached.thinking || '', model);
+          const cachedText = maybeNeutralizeCascadeIdentity(cached.text || '', model);
           if (cachedThinking) {
             send({ id, object: 'chat.completion.chunk', created, model,
               choices: [{ index: 0, delta: { reasoning_content: cachedThinking }, finish_reason: null }] });
@@ -2734,7 +2740,7 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
 
       const emitContent = (clean) => {
         if (!clean) return;
-        clean = neutralizeCascadeIdentity(clean, model);
+        clean = maybeNeutralizeCascadeIdentity(clean, model);
         accText += clean;
         // When response_format=json_object/json_schema is set, buffer text
         // instead of streaming it out. We can't safely fence-strip in the
@@ -2746,7 +2752,7 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
       };
       const emitThinking = (clean) => {
         if (!clean) return;
-        clean = neutralizeCascadeIdentity(clean, model);
+        clean = maybeNeutralizeCascadeIdentity(clean, model);
         accThinking += clean;
         send({ id, object: 'chat.completion.chunk', created, model,
           choices: [{ index: 0, delta: { reasoning_content: clean }, finish_reason: null }] });

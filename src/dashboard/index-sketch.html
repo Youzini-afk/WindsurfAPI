@@ -1954,6 +1954,52 @@ window._firebaseOAuth = async function(provider) {
     <div class="section" style="margin-top:24px">
       <div class="section-head">
         <div>
+          <div class="section-title"><span class="num">~</span><span data-zh="内置提示词开关" data-en="Built-in prompt toggles">内置提示词开关</span></div>
+          <div class="section-desc" data-zh="默认全部开启以保持兼容；文字聊天场景可以按需关闭来减轻 prompt。" data-en="Enabled by default for compatibility; plain text chat can turn them off for lighter prompts.">默认全部开启以保持兼容；文字聊天场景可以按需关闭来减轻 prompt。</div>
+        </div>
+      </div>
+      <div class="frame" style="display:grid;gap:14px">
+        <div style="display:flex;align-items:center;gap:14px">
+          <label class="switch"><input type="checkbox" id="exp-no-tool-guard-prompt" onchange="App.toggleExperimental('noToolGuardPrompt', this.checked)"><span class="switch-slider"></span></label>
+          <div>
+            <div style="font-weight:500" data-zh="无工具防幻觉提示" data-en="No-tool guard prompt">无工具防幻觉提示</div>
+            <div class="text-sm text-mute" data-zh="控制 No tools available 和普通聊天模式约束。" data-en="Controls no-tools text and plain chat constraints.">控制 No tools available 和普通聊天模式约束。</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;padding-top:12px;border-top:1px dashed var(--rule-faint)">
+          <label class="switch"><input type="checkbox" id="exp-communication-section-prompt" onchange="App.toggleExperimental('communicationSectionPrompt', this.checked)"><span class="switch-slider"></span></label>
+          <div>
+            <div style="font-weight:500" data-zh="通信区提示词" data-en="Communication section prompt">通信区提示词</div>
+            <div class="text-sm text-mute" data-zh="控制有工具/无工具时的 communication_section 模板。" data-en="Controls with-tools and no-tools communication_section templates.">控制有工具/无工具时的 communication_section 模板。</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;padding-top:12px;border-top:1px dashed var(--rule-faint)">
+          <label class="switch"><input type="checkbox" id="exp-tool-reinforcement-prompt" onchange="App.toggleExperimental('toolReinforcementPrompt', this.checked)"><span class="switch-slider"></span></label>
+          <div>
+            <div style="font-weight:500" data-zh="工具调用格式强化" data-en="Tool-call format reinforcement">工具调用格式强化</div>
+            <div class="text-sm text-mute" data-zh="控制工具列表后追加的 tool_call 格式说明。" data-en="Controls the tool_call format guide appended after tool lists.">控制工具列表后追加的 tool_call 格式说明。</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;padding-top:12px;border-top:1px dashed var(--rule-faint)">
+          <label class="switch"><input type="checkbox" id="exp-json-response-hint" onchange="App.toggleExperimental('jsonResponseHint', this.checked)"><span class="switch-slider"></span></label>
+          <div>
+            <div style="font-weight:500" data-zh="JSON 响应提示" data-en="JSON response hint">JSON 响应提示</div>
+            <div class="text-sm text-mute" data-zh="控制 JSON-only 系统提示是否追加。" data-en="Controls whether the JSON-only system hint is appended.">控制 JSON-only 系统提示是否追加。</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;padding-top:12px;border-top:1px dashed var(--rule-faint)">
+          <label class="switch"><input type="checkbox" id="exp-identity-neutralization" onchange="App.toggleExperimental('identityNeutralization', this.checked)"><span class="switch-slider"></span></label>
+          <div>
+            <div style="font-weight:500" data-zh="Cascade 身份输出清理" data-en="Cascade identity cleanup">Cascade 身份输出清理</div>
+            <div class="text-sm text-mute" data-zh="关闭后不会改写模型原始输出。" data-en="When disabled, raw model output is returned.">关闭后不会改写模型原始输出。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" style="margin-top:24px">
+      <div class="section-head">
+        <div>
           <div class="section-title"><span class="num">~</span><span data-zh="系统提示词" data-en="System prompts">系统提示词</span></div>
           <div class="section-desc" data-zh="工具注入、对话模式等内置提示词。改完点 save；reset 恢复默认。" data-en="Built-in prompt templates. Edit and save; reset to restore defaults.">工具注入、对话模式等内置提示词。改完点 save；reset 恢复默认。</div>
         </div>
@@ -3336,9 +3382,20 @@ const App = {
     // v2.0.56: refresh credentials snapshot when the panel opens.
     this.loadCredentials();
     const r = await this.api('GET', '/experimental');
-    const flag = r.flags?.cascadeConversationReuse ?? r.cascadeConversationReuse;
-    const cb = document.getElementById('exp-cascade-reuse');
-    if (cb) cb.checked = !!flag;
+    const flags = r.flags || {};
+    const flagIds = {
+      cascadeConversationReuse: 'exp-cascade-reuse',
+      droughtRestrictPremium: 'exp-drought-restrict',
+      noToolGuardPrompt: 'exp-no-tool-guard-prompt',
+      communicationSectionPrompt: 'exp-communication-section-prompt',
+      toolReinforcementPrompt: 'exp-tool-reinforcement-prompt',
+      jsonResponseHint: 'exp-json-response-hint',
+      identityNeutralization: 'exp-identity-neutralization'
+    };
+    for (const [key, id] of Object.entries(flagIds)) {
+      const cb = document.getElementById(id);
+      if (cb) cb.checked = !!(flags[key] ?? r[key]);
+    }
     const pool = r.conversationPool || {};
     document.getElementById('exp-pool-cards').innerHTML = `
       ${this.metric({ label: 'pool size', value: pool.size || 0 })}

@@ -249,6 +249,30 @@
       "title": "System Prompts",
       "desc": "Tool injection, conversation mode and other built-in prompt templates. Changes take effect immediately; click \"Reset\" to restore defaults."
     },
+    "promptToggles": {
+      "title": "Built-in Prompt Toggles",
+      "desc": "Control built-in prompt injection and response identity cleanup. All are enabled by default for compatibility; plain text chat deployments can disable them to keep prompts lighter.",
+      "noToolGuard": {
+        "title": "No-tool guard prompt",
+        "desc": "Controls the \"No tools are available\" text and plain chat operating constraints. Disabling makes no-tool requests lighter, but the model may be more likely to narrate nonexistent file/tool actions."
+      },
+      "communication": {
+        "title": "Communication section prompt",
+        "desc": "Controls whether the with-tools and no-tools communication_section templates below are injected."
+      },
+      "toolReinforcement": {
+        "title": "Tool-call format reinforcement",
+        "desc": "Controls the extra tool_call format guide appended after the tool list. Recommended for tool-calling clients; plain text chat can disable it."
+      },
+      "jsonHint": {
+        "title": "JSON response hint",
+        "desc": "Controls the JSON-only system hint added when response_format or an explicit JSON request is detected."
+      },
+      "identityNeutralization": {
+        "title": "Cascade identity cleanup",
+        "desc": "Controls replacement of Cascade/Windsurf self-identification in response text. When disabled, raw model output is returned."
+      }
+    },
     "credentials": {
       "title": "Credentials",
       "desc": "Rotate API_KEY and the dashboard password at runtime. Saved into runtime-config.json and applied immediately — no container restart or .env reload needed. Next request must use the new value; the current session will be asked to re-login."
