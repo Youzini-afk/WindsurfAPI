@@ -3383,8 +3383,10 @@ docker compose up -d --force-recreate</pre>
     if (!input.trim()) return this.toast(I18n.t('batch.pasteFirst'), 'error');
 
     const autoAdd = document.getElementById('wl-auto-add').checked;
+    const proxy = this.getWindsurfLoginProxy();
     const btn = document.getElementById('wl-batch-btn');
-    const lineCount = input.trim().split('\n').filter(l => l.trim()).length;
+    const lines = input.replace(/\r\n?/g, '\n').split('\n').map(l => l.trim()).filter(Boolean);
+    const lineCount = lines.length;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> ' + I18n.t('batch.importing');
     this.showWindsurfLoginResult(`
@@ -3396,28 +3398,36 @@ docker compose up -d --force-recreate</pre>
       </div>`);
 
     try {
-      const r = await this.api('POST', '/batch-import', { text: input, autoAdd });
-      if (!r.success || !Array.isArray(r.results)) {
-        const errKey = r.error ? `error.${r.error}` : null;
+      const results = [];
+      for (let i = 0; i < lines.length; i++) {
         this.showWindsurfLoginResult(`
           <div class="section-header">
-            <div><div class="section-title" style="color:var(--error)">${I18n.t('loginResult.fail')}</div></div>
-          </div>
-          <div class="section-body"><p class="text-sm">${this.esc((errKey && I18n.t(errKey) !== errKey) ? I18n.t(errKey) : (r.error || I18n.t('error.unknown')))}</p></div>`);
-        const translatedErr = errKey && I18n.t(errKey) !== errKey ? I18n.t(errKey) : r.error;
-        return this.toast(translatedErr || I18n.t('batch.importFailed'), 'error');
+            <div>
+              <div class="section-title">${I18n.t('batch.importing')}</div>
+              <div class="section-desc">${I18n.t('batch.importingDesc', {count: lineCount})} · ${i + 1}/${lineCount}</div>
+            </div>
+          </div>`);
+        const r = await this.api('POST', '/batch-import', { text: lines[i], autoAdd, proxy, delayMs: 0 });
+        if (!r.success || !Array.isArray(r.results)) {
+          results.push({ success: false, email: lines[i].slice(0, 30), error: r.error || I18n.t('error.unknown') });
+        } else {
+          results.push(...r.results);
+        }
+        if (i < lines.length - 1) await new Promise(resolve => setTimeout(resolve, 2500));
       }
 
-      this.renderBatchWindsurfLoginResult(r.results, autoAdd);
-      this.pushLoginHistoryEntries(r.results.map(item => ({
+      const successCount = results.filter(r => r.success).length;
+      const failCount = results.length - successCount;
+      this.renderBatchWindsurfLoginResult(results, autoAdd);
+      this.pushLoginHistoryEntries(results.map(item => ({
           time: new Date().toISOString(),
           email: item.email,
           proxy: this.getWindsurfProxyLabel(item.proxy),
           status: item.success ? 'success' : `error: ${item.error || 'unknown'}`,
           apiKey: item.success ? (item.apiKey_masked || (item.apiKey ? item.apiKey.slice(0, 16) + '...' : undefined)) : undefined,
         })));
-      this.toast(I18n.t('batch.importComplete', {success: r.successCount || 0, fail: r.failCount || 0}), (r.failCount || 0) ? 'info' : 'success');
-      if ((r.successCount || 0) > 0) {
+      this.toast(I18n.t('batch.importComplete', {success: successCount, fail: failCount}), failCount ? 'info' : 'success');
+      if (successCount > 0) {
         this.loadAccounts();
         document.getElementById('wl-batch-input').value = '';
       }

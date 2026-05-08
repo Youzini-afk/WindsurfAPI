@@ -42,6 +42,8 @@ import {
   _runOneTick as runQuietWindowTickNow,
 } from './quiet-window-updater.js';
 
+const DEFAULT_BATCH_LOGIN_DELAY_MS = 2500;
+
 export function parseProxyUrl(proxy) {
   // Normalize whitespace so "socks5 127.0.0.1   1089" and
   // "socks5://127.0.0.1:1089" both parse correctly.
@@ -121,6 +123,20 @@ export function parseBatchImportLine(line) {
   return null;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export function getBatchLoginDelayMs(raw = process.env.WINDSURFAPI_BATCH_LOGIN_DELAY_MS) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_BATCH_LOGIN_DELAY_MS;
+  return Math.max(0, Math.min(30000, Math.floor(n)));
+}
+
+async function delayBetweenBatchLogins(index, total, delayMs) {
+  if (delayMs > 0 && index < total - 1) await sleep(delayMs);
+}
+
 function json(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
@@ -172,7 +188,7 @@ function checkAuth(req) {
   return false;
 }
 
-async function processWindsurfLogin({ email, password, loginProxy, autoAdd }) {
+async function processWindsurfLogin({ email, password, loginProxy, autoAdd, warmup = true }) {
   if (!email || !password) {
     const err = new Error('ERR_EMAIL_PASSWORD_REQUIRED');
     err.statusCode = 400;
@@ -196,9 +212,11 @@ async function processWindsurfLogin({ email, password, loginProxy, autoAdd }) {
     // Persist the per-account proxy we used for login so chat requests
     // also egress through the same IP, then warm up a matching LS.
     if (loginProxy?.host) setAccountProxy(account.id, loginProxy);
-    ensureLsForAccount(account.id)
-      .then(() => probeAccount(account.id))
-      .catch(e => log.warn(`Auto-probe failed: ${e.message}`));
+    if (warmup) {
+      ensureLsForAccount(account.id)
+        .then(() => probeAccount(account.id))
+        .catch(e => log.warn(`Auto-probe failed: ${e.message}`));
+    }
   }
 
   return {
@@ -1229,11 +1247,13 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       }
 
       const results = [];
-      for (const acct of accounts) {
+      const delayMs = getBatchLoginDelayMs(body?.delayMs);
+      for (let i = 0; i < accounts.length; i++) {
+        const acct = accounts[i];
         const email = String(acct?.email || '').trim();
         const password = String(acct?.password || '').trim();
         try {
-          const result = await processWindsurfLogin({ email, password, loginProxy, autoAdd });
+          const result = await processWindsurfLogin({ email, password, loginProxy, autoAdd, warmup: false });
           results.push(result);
         } catch (err) {
           results.push({
@@ -1244,6 +1264,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
             firebaseCode: err.firebaseCode,
           });
         }
+        await delayBetweenBatchLogins(i, accounts.length, delayMs);
       }
 
       const successCount = results.filter(r => r.success).length;
@@ -1271,26 +1292,31 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       if (!lines.length) return json(res, 400, { error: 'ERR_NO_VALID_LINES' });
 
       const results = [];
-      for (const line of lines) {
+      const delayMs = getBatchLoginDelayMs(body?.delayMs);
+      const fallbackLoginProxy = body?.proxy?.host ? body.proxy : getProxyConfig().global;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
         const parsedLine = parseBatchImportLine(line);
         if (!parsedLine) {
           results.push({ success: false, email: line.slice(0, 30), error: 'ERR_FORMAT_INVALID' });
+          await delayBetweenBatchLogins(i, lines.length, delayMs);
           continue;
         }
         const { proxy, email, password } = parsedLine;
         try {
-          const loginProxy = proxy ? parseProxyUrl(proxy) : getProxyConfig().global;
-          const result = await processWindsurfLogin({ email, password, loginProxy, autoAdd });
+          const loginProxy = proxy ? parseProxyUrl(proxy) : fallbackLoginProxy;
+          const result = await processWindsurfLogin({ email, password, loginProxy, autoAdd, warmup: false });
           const binding = buildBatchProxyBinding(result, proxy);
           if (binding) {
               setAccountProxy(binding.accountId, binding.proxy);
               result.proxy = proxy;
-              ensureLsForAccount(binding.accountId).catch(() => {});
           }
+          if (!result.proxy && loginProxy?.host) result.proxy = loginProxy;
           results.push(result);
         } catch (err) {
           results.push({ success: false, email, error: err.message });
         }
+        await delayBetweenBatchLogins(i, lines.length, delayMs);
       }
       const successCount = results.filter(r => r.success).length;
       return json(res, 200, { success: true, total: results.length, successCount, failCount: results.length - successCount, results });

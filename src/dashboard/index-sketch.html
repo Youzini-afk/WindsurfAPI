@@ -2685,23 +2685,34 @@ const App = {
     const input = document.getElementById('wl-batch-input').value;
     if (!input.trim()) return this.toast('paste accounts first', 'error');
     const autoAdd = document.getElementById('wl-auto-add').checked;
+    const proxy = this.getWindsurfLoginProxy();
+    const lines = input.replace(/\r\n?/g, '\n').split('\n').map(l => l.trim()).filter(Boolean);
     const btn = document.getElementById('wl-batch-btn');
     btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> importing …';
     try {
-      const r = await this.api('POST', '/batch-import', { text: input, autoAdd });
-      if (!r.success || !Array.isArray(r.results)) {
-        this.toast(r.error || 'batch failed', 'error'); return;
+      const results = [];
+      for (let i = 0; i < lines.length; i++) {
+        this.showWLResult(`<div class="anno" style="font-size:20px">batch · importing ${i + 1}/${lines.length}</div>`);
+        const r = await this.api('POST', '/batch-import', { text: lines[i], autoAdd, proxy, delayMs: 0 });
+        if (!r.success || !Array.isArray(r.results)) {
+          results.push({ success: false, email: lines[i].slice(0, 30), error: r.error || 'batch failed' });
+        } else {
+          results.push(...r.results);
+        }
+        if (i < lines.length - 1) await new Promise(resolve => setTimeout(resolve, 2500));
       }
-      this.showWLResult(`<div class="anno" style="font-size:20px">batch · ${r.successCount || 0} ok / ${r.failCount || 0} fail</div>
+      const successCount = results.filter(x => x.success).length;
+      const failCount = results.length - successCount;
+      this.showWLResult(`<div class="anno" style="font-size:20px">batch · ${successCount} ok / ${failCount} fail</div>
         <div class="table-wrap" style="margin-top:12px"><table>
           <thead><tr><th>email</th><th>status</th><th>note</th></tr></thead>
-          <tbody>${r.results.map(x => `<tr><td>${this.esc(x.email || '-')}</td>
+          <tbody>${results.map(x => `<tr><td>${this.esc(x.email || '-')}</td>
             <td><span class="badge ${x.success ? 'active' : 'error'}">${x.success ? 'ok' : 'fail'}</span></td>
             <td class="text-sm">${x.success ? `<code class="break-all">${this.esc(x.apiKey_masked || x.apiKey?.slice(0,16) + '…' || '-')}</code>` : `<span style="color:var(--error)">${this.esc(x.error || 'unknown')}</span>`}</td></tr>`).join('')}</tbody>
         </table></div>`);
-      this.pushLoginHistoryEntries(r.results.map(x => ({ time: new Date().toISOString(), email: x.email, proxy: 'batch', status: x.success ? 'success' : 'error: ' + (x.error || 'unknown'), apiKey: x.success ? x.apiKey_masked : undefined })));
-      this.toast(`batch · ${r.successCount || 0} ok / ${r.failCount || 0} fail`);
-      if ((r.successCount || 0) > 0) { this.loadAccounts(); document.getElementById('wl-batch-input').value = ''; }
+      this.pushLoginHistoryEntries(results.map(x => ({ time: new Date().toISOString(), email: x.email, proxy: this.proxyLabel(x.proxy || proxy), status: x.success ? 'success' : 'error: ' + (x.error || 'unknown'), apiKey: x.success ? x.apiKey_masked : undefined })));
+      this.toast(`batch · ${successCount} ok / ${failCount} fail`);
+      if (successCount > 0) { this.loadAccounts(); document.getElementById('wl-batch-input').value = ''; }
     } catch (err) { this.toast(err.message, 'error'); }
     finally { btn.disabled = false; btn.textContent = '批量导入'; }
   },

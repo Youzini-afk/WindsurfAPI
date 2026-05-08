@@ -2,7 +2,7 @@ import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { config } from '../src/config.js';
 import { configureBindHost } from '../src/auth.js';
-import { buildBatchProxyBinding, handleDashboardApi, parseBatchImportLine } from '../src/dashboard/api.js';
+import { buildBatchProxyBinding, getBatchLoginDelayMs, handleDashboardApi, parseBatchImportLine } from '../src/dashboard/api.js';
 
 const originalDashboardPassword = config.dashboardPassword;
 const originalApiKey = config.apiKey;
@@ -24,6 +24,21 @@ function fakeRes() {
 }
 
 describe('dashboard batch import proxy binding', () => {
+  it('uses a bounded positive delay between batch login attempts', () => {
+    const old = process.env.WINDSURFAPI_BATCH_LOGIN_DELAY_MS;
+    delete process.env.WINDSURFAPI_BATCH_LOGIN_DELAY_MS;
+    try {
+      assert.equal(getBatchLoginDelayMs(undefined), 2500);
+      assert.equal(getBatchLoginDelayMs(0), 0);
+      assert.equal(getBatchLoginDelayMs(1200), 1200);
+      assert.equal(getBatchLoginDelayMs(999999), 30000);
+      assert.equal(getBatchLoginDelayMs('not-a-number'), 2500);
+    } finally {
+      if (old === undefined) delete process.env.WINDSURFAPI_BATCH_LOGIN_DELAY_MS;
+      else process.env.WINDSURFAPI_BATCH_LOGIN_DELAY_MS = old;
+    }
+  });
+
   it('parses email----password batch lines', () => {
     assert.deepEqual(
       parseBatchImportLine('cam.t635.66+liqfsx98@gmail.com----7UcYw7rMl2nf4V'),

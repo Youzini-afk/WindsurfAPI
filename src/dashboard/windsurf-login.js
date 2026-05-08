@@ -614,6 +614,11 @@ function recordEmailSuccess(email) {
   _emailFailures.delete(email.toLowerCase());
 }
 
+export function isFirebaseAppCheckError(err) {
+  const msg = `${err?.message || ''} ${err?.code || ''} ${err?.firebaseCode || ''}`;
+  return /app\s*check|app_check|APP_CHECK|Firebase App Check token is invalid/i.test(msg);
+}
+
 setInterval(() => {
   const now = Date.now();
   for (const [k, e] of _emailFailures) {
@@ -678,7 +683,8 @@ export async function windsurfLogin(email, password, proxy = null) {
     recordEmailSuccess(email);
     return result;
   } catch (firebaseErr) {
-    if (!firebaseErr?.isAuthFail) {
+    const shouldTryAuth1AfterFirebase = firebaseErr?.isAuthFail || isFirebaseAppCheckError(firebaseErr);
+    if (!shouldTryAuth1AfterFirebase) {
       // Network / Firebase 5xx — don't count, just bubble up.
       throw firebaseErr;
     }
@@ -692,7 +698,7 @@ export async function windsurfLogin(email, password, proxy = null) {
         // Both paths confirmed the credential is wrong — count as one
         // failure (not two) so 3 distinct attempts truly = ban.
         recordEmailFailure(email, firebaseErr?.message || auth1Err?.message);
-        throw firebaseErr;
+        throw firebaseErr?.isAuthFail ? firebaseErr : auth1Err;
       }
       throw auth1Err;
     }

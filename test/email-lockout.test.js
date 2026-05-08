@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  checkEmailLocked, _resetEmailLockoutForTests,
+  checkEmailLocked, isFirebaseAppCheckError, _resetEmailLockoutForTests,
 } from '../src/dashboard/windsurf-login.js';
 
 beforeEach(() => { _resetEmailLockoutForTests(); });
@@ -26,7 +26,14 @@ describe('email lockout exports', () => {
   it('exports checkEmailLocked + _resetEmailLockoutForTests', async () => {
     const m = await import('../src/dashboard/windsurf-login.js');
     assert.equal(typeof m.checkEmailLocked, 'function');
+    assert.equal(typeof m.isFirebaseAppCheckError, 'function');
     assert.equal(typeof m._resetEmailLockoutForTests, 'function');
     assert.equal(typeof m.windsurfLogin, 'function');
+  });
+
+  it('detects Firebase App Check as a dead Firebase-path error', () => {
+    assert.equal(isFirebaseAppCheckError(new Error('Firebase App Check token is invalid.')), true);
+    assert.equal(isFirebaseAppCheckError({ message: 'APP_CHECK_TOKEN_EXPIRED' }), true);
+    assert.equal(isFirebaseAppCheckError(new Error('Request timeout')), false);
   });
 });

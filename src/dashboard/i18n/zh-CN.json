@@ -857,7 +857,7 @@
   "batch": {
     "pasteFirst": "请先粘贴批量账号",
     "importing": "导入中...",
-    "importingDesc": "{{count}} 行，请稍候",
+    "importingDesc": "{{count}} 行，正在逐个登录，请稍候",
     "complete": "批量导入完成",
     "importFailed": "批量导入失败",
     "importComplete": "批量导入完成：成功 {{success}} / 失败 {{fail}}",

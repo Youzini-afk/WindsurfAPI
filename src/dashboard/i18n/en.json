@@ -857,7 +857,7 @@
   "batch": {
     "pasteFirst": "Please paste batch accounts first",
     "importing": "Importing...",
-    "importingDesc": "{{count}} lines, please wait",
+    "importingDesc": "{{count}} lines, logging in one by one, please wait",
     "complete": "Batch import complete",
     "importFailed": "Batch import failed",
     "importComplete": "Batch import complete: success {{success}} / failed {{fail}}",
