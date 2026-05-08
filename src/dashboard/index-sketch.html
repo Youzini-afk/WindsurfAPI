@@ -1652,7 +1652,7 @@ window._firebaseOAuth = async function(provider) {
       <div class="section-head">
         <div>
           <div class="section-title"><span class="num">2</span><span data-zh="邮箱密码登录" data-en="Email + password (registered)">邮箱密码登录</span></div>
-          <div class="section-desc" data-zh="仅限邮箱+密码注册的账号 第三方登录请用上面的按钮；支持单个登录或按「邮箱 密码」格式批量导入" data-en="Email/password registered accounts only — for OAuth use the buttons above. Single login or batch import with «email password» per line.">仅限邮箱+密码注册的账号 第三方登录请用上面的按钮；支持单个登录或按「邮箱 密码」格式批量导入</div>
+          <div class="section-desc" data-zh="仅限邮箱+密码注册的账号 第三方登录请用上面的按钮；支持单个登录或按「邮箱 密码 / 邮箱----密码」格式批量导入" data-en="Email/password registered accounts only — for OAuth use the buttons above. Single login or batch import with «email password» / «email----password» per line.">仅限邮箱+密码注册的账号 第三方登录请用上面的按钮；支持单个登录或按「邮箱 密码 / 邮箱----密码」格式批量导入</div>
         </div>
       </div>
       <div class="frame">
@@ -1672,12 +1672,12 @@ window._firebaseOAuth = async function(provider) {
       <div class="section-head">
         <div>
           <div class="section-title"><span class="num">3</span><span data-zh="批量导入" data-en="Batch import">批量导入</span></div>
-          <div class="section-desc" data-zh="每行一组：email password [proxy]。proxy 可省略；格式 type://[user:pass@]host:port，例 socks5://127.0.0.1:7890 或 http://u:p@1.2.3.4:8080。空白行忽略。" data-en="One per line: email password [proxy]. Proxy is optional; format type://[user:pass@]host:port (e.g. socks5://127.0.0.1:7890 or http://u:p@1.2.3.4:8080). Blank lines ignored.">每行一组：email password [proxy]。proxy 可省略；格式 type://[user:pass@]host:port，例 socks5://127.0.0.1:7890 或 http://u:p@1.2.3.4:8080。空白行忽略。</div>
+          <div class="section-desc" data-zh="每行一组：[proxy] email password 或 email----password。proxy 可省略；格式 type://[user:pass@]host:port，例 socks5://127.0.0.1:7890 或 http://u:p@1.2.3.4:8080。空白行忽略。" data-en="One per line: [proxy] email password or email----password. Proxy is optional; format type://[user:pass@]host:port (e.g. socks5://127.0.0.1:7890 or http://u:p@1.2.3.4:8080). Blank lines ignored.">每行一组：[proxy] email password 或 email----password。proxy 可省略；格式 type://[user:pass@]host:port，例 socks5://127.0.0.1:7890 或 http://u:p@1.2.3.4:8080。空白行忽略。</div>
         </div>
         <button class="btn btn-ghost btn-sm" onclick="App.pasteWindsurfBatch()"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg> paste</button>
       </div>
       <div class="frame">
-        <textarea class="textarea input" id="wl-batch-input" rows="6" style="font-family:'JetBrains Mono',monospace;resize:vertical;width:100%" placeholder="alice@example.com  hunter2&#10;bob@example.com  letme1n"></textarea>
+        <textarea class="textarea input" id="wl-batch-input" rows="6" style="font-family:'JetBrains Mono',monospace;resize:vertical;width:100%" placeholder="alice@example.com  hunter2&#10;bob@example.com----letme1n"></textarea>
         <div class="field-row-actions">
           <button class="btn btn-primary" id="wl-batch-btn" onclick="App.windsurfLoginBatch()" data-zh="批量导入" data-en="Batch import">批量导入</button>
         </div>

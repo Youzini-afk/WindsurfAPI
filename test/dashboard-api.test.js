@@ -2,7 +2,7 @@ import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { config } from '../src/config.js';
 import { configureBindHost } from '../src/auth.js';
-import { buildBatchProxyBinding, handleDashboardApi } from '../src/dashboard/api.js';
+import { buildBatchProxyBinding, handleDashboardApi, parseBatchImportLine } from '../src/dashboard/api.js';
 
 const originalDashboardPassword = config.dashboardPassword;
 const originalApiKey = config.apiKey;
@@ -24,6 +24,45 @@ function fakeRes() {
 }
 
 describe('dashboard batch import proxy binding', () => {
+  it('parses email----password batch lines', () => {
+    assert.deepEqual(
+      parseBatchImportLine('cam.t635.66+liqfsx98@gmail.com----7UcYw7rMl2nf4V'),
+      {
+        proxy: null,
+        email: 'cam.t635.66+liqfsx98@gmail.com',
+        password: '7UcYw7rMl2nf4V',
+      }
+    );
+    assert.deepEqual(
+      parseBatchImportLine('HTTP://proxy.example.com:8080 user@example.com----p-a-s-s'),
+      {
+        proxy: 'HTTP://proxy.example.com:8080',
+        email: 'user@example.com',
+        password: 'p-a-s-s',
+      }
+    );
+  });
+
+  it('keeps existing whitespace batch line formats', () => {
+    assert.deepEqual(
+      parseBatchImportLine('user@example.com hunter2'),
+      { proxy: null, email: 'user@example.com', password: 'hunter2' }
+    );
+    assert.deepEqual(
+      parseBatchImportLine('socks5://user:pass@proxy.example.com:1080 user@example.com hunter2'),
+      {
+        proxy: 'socks5://user:pass@proxy.example.com:1080',
+        email: 'user@example.com',
+        password: 'hunter2',
+      }
+    );
+  });
+
+  it('rejects malformed pasted separator lines without mis-parsing them as accounts', () => {
+    assert.equal(parseBatchImportLine('===='), null);
+    assert.equal(parseBatchImportLine('not proxy user@example.com----pass'), null);
+  });
+
   it('uses nested result.account.id from processWindsurfLogin output', () => {
     const binding = buildBatchProxyBinding(
       { success: true, account: { id: 'acct_123' } },

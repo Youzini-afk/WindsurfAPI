@@ -85,6 +85,42 @@ export function buildBatchProxyBinding(result, proxy) {
   };
 }
 
+function isProxyToken(token) {
+  const s = String(token || '');
+  return s.includes('://') || s.includes(':');
+}
+
+export function parseBatchImportLine(line) {
+  const s = String(line || '').trim();
+  if (!s) return null;
+
+  // Support mailbox dumps that use "email----password". Four or more
+  // hyphens are treated as the separator; shorter hyphens remain part of
+  // the email/password text.
+  const dashMatch = s.match(/^(.+?)-{4,}(.+)$/);
+  if (dashMatch) {
+    const left = dashMatch[1].trim();
+    const password = dashMatch[2].trim();
+    const parts = left.split(/\s+/).filter(Boolean);
+    if (parts.length === 1) {
+      return { proxy: null, email: parts[0], password };
+    }
+    if (parts.length === 2 && isProxyToken(parts[0])) {
+      return { proxy: parts[0], email: parts[1], password };
+    }
+    return null;
+  }
+
+  const parts = s.split(/\s+/).filter(Boolean);
+  if (parts.length >= 3 && isProxyToken(parts[0])) {
+    return { proxy: parts[0], email: parts[1], password: parts.slice(2).join(' ') };
+  }
+  if (parts.length >= 2) {
+    return { proxy: null, email: parts[0], password: parts.slice(1).join(' ') };
+  }
+  return null;
+}
+
 function json(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
@@ -1225,7 +1261,8 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
   }
 
   // ─── Batch proxy + account import ─────────────────────
-  // POST /batch-import — each line: "proxy email password" or "email password"
+  // POST /batch-import — each line: "proxy email password", "email password",
+  // or "email----password".
   if (subpath === '/batch-import' && method === 'POST') {
     try {
       const { text, autoAdd = true } = body || {};
@@ -1235,19 +1272,12 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
 
       const results = [];
       for (const line of lines) {
-        const parts = line.split(/\s+/);
-        let proxy = null, email, password;
-        if (parts.length >= 3 && (parts[0].includes('://') || parts[0].includes(':'))) {
-          proxy = parts[0];
-          email = parts[1];
-          password = parts[2];
-        } else if (parts.length >= 2) {
-          email = parts[0];
-          password = parts[1];
-        } else {
+        const parsedLine = parseBatchImportLine(line);
+        if (!parsedLine) {
           results.push({ success: false, email: line.slice(0, 30), error: 'ERR_FORMAT_INVALID' });
           continue;
         }
+        const { proxy, email, password } = parsedLine;
         try {
           const loginProxy = proxy ? parseProxyUrl(proxy) : getProxyConfig().global;
           const result = await processWindsurfLogin({ email, password, loginProxy, autoAdd });

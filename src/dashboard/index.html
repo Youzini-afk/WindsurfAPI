@@ -1670,9 +1670,9 @@ window._firebaseOAuth = async function(provider) {
             id="wl-batch-input"
             class="textarea"
             rows="6"
-            placeholder="user1@mail.com  pass123&#10;http://proxy:8080 user2@mail.com  pass456&#10;socks5://user:pass@1.2.3.4:1080 user3@mail.com  pass789"
+            placeholder="user1@mail.com  pass123&#10;user2@mail.com----pass456&#10;http://proxy:8080 user3@mail.com  pass789"
           ></textarea>
-          <div class="field-hint" data-i18n="field.batchInput.hint">每行一个账号。格式：<code>[代理] 邮箱 密码</code>。代理可选，支持 http/socks5。会自动绑定代理到对应账号。</div>
+          <div class="field-hint" data-i18n="field.batchInput.hint">每行一个账号。格式：<code>[代理] 邮箱 密码</code> 或 <code>邮箱----密码</code>。代理可选，支持 http/socks5。会自动绑定代理到对应账号。</div>
           <div class="field-row-actions">
             <button class="btn btn-outline" onclick="App.pasteWindsurfBatch()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>

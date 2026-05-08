@@ -414,7 +414,7 @@
     },
     "batchInput": {
       "label": "Batch Import",
-      "hint": "One account per line. Format: [proxy] email password. Proxy is optional, supports http/socks5. Proxy will be automatically bound to corresponding account."
+      "hint": "One account per line. Format: [proxy] email password or email----password. Proxy is optional, supports http/socks5. Proxy will be automatically bound to corresponding account."
     },
     "proxyType": {
       "label": "Type"
