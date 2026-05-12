@@ -6,6 +6,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { WindsurfClient, contentToString, isCascadeTransportError } from '../client.js';
 import { getApiKey, acquireAccountByKey, releaseAccount, getAccountAvailability, reportError, reportSuccess, markRateLimited, reportInternalError, updateCapability, getAccountList, isAllRateLimited, isAllTemporarilyUnavailable, refundReservation, looksLikeBanSignal, reportBanSignal, clearBanSignals, isModelBlockedByDrought, getDroughtSummary } from '../auth.js';
+import { isStickyEnabled, setStickyBinding } from '../account/sticky-session.js';
 import { resolveModel, getModelInfo, pickRateLimitFallback } from '../models.js';
 import { getLsFor, ensureLs } from '../langserver.js';
 import { config, log } from '../config.js';
@@ -1161,14 +1162,14 @@ export function buildUsageBody(serverUsage, messages, completionText, thinkingTe
 // Wait until getApiKey returns a non-null account, or until maxWaitMs expires.
 // Used when every account has momentarily exhausted its RPM budget so the
 // client is queued instead of getting a 503.
-async function waitForAccount(tried, signal, maxWaitMs = QUEUE_MAX_WAIT_MS, modelKey = null) {
+async function waitForAccount(tried, signal, maxWaitMs = QUEUE_MAX_WAIT_MS, modelKey = null, callerKey = null) {
   const deadline = Date.now() + maxWaitMs;
-  let acct = getApiKey(tried, modelKey);
+  let acct = getApiKey(tried, modelKey, callerKey);
   while (!acct) {
     if (signal?.aborted) return null;
     if (Date.now() >= deadline) return null;
     await new Promise(r => setTimeout(r, QUEUE_RETRY_MS));
-    acct = getApiKey(tried, modelKey);
+    acct = getApiKey(tried, modelKey, callerKey);
   }
   return acct;
 }
@@ -1885,7 +1886,7 @@ async function _handleChatCompletionsInner(body, context = {}) {
       }
     }
     if (!acct) {
-      acct = await waitForAccountFn(tried, null, QUEUE_MAX_WAIT_MS, routingModelKey);
+      acct = await waitForAccountFn(tried, null, QUEUE_MAX_WAIT_MS, routingModelKey, callerKey);
       if (!acct) {
         // Same diagnostic-error fix as the stream path — surface real reason
         // for the queue timeout (rate limit / no entitlement / upstream stall)
@@ -2267,10 +2268,16 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
           // args case (#125 DuZunTianXia) goes from 0 tool_calls to
           // a real protocol emit on the second pass.
           //
-          // Default OFF — burns 2x account quota when active. Operator
-          // opts in via WINDSURFAPI_NLU_RETRY=1.
+          // Default ON for GLM/Kimi (notoriously narrate instead of calling
+          // tools on first pass). Claude/GPT have good first-pass compliance
+          // so they only get retry when explicitly opted in. Set
+          // WINDSURFAPI_NLU_RETRY=0 to disable globally.
+          const nluRetryEnabled = process.env.WINDSURFAPI_NLU_RETRY !== '0'
+            && (process.env.WINDSURFAPI_NLU_RETRY === '1'
+                || /zhipu|glm|moonshot|kimi/i.test(String(provider || ''))
+                || /^(?:glm|kimi)/i.test(String(modelKey || '')));
           if (toolCalls.length === 0
-              && process.env.WINDSURFAPI_NLU_RETRY === '1'
+              && nluRetryEnabled
               && Array.isArray(tools) && tools.length > 0
               && narrativeSource) {
             const lastUser = latestRealUserText(messages) || '';
@@ -2435,6 +2442,13 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
         historyCoverage: cascadeMeta.historyCoverage || poolCtx.reuseEntry?.historyCoverage || null,
         createdAt: poolCtx.reuseEntry?.createdAt,
       }, poolCtx.callerKey || '', ttlHint === undefined ? 0 : ttlHint);
+
+      // Bind caller to this account for the next turn in the
+      // conversation. Without this, the next request picks a different
+      // account from the pool and the cascade_id becomes invalid.
+      if (poolCtx.callerKey && isStickyEnabled() && acct) {
+        setStickyBinding(poolCtx.callerKey, modelKey, acct.id, acct.apiKey);
+      }
     }
 
     reportSuccess(apiKey);
@@ -2452,6 +2466,23 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
     // next identical original-model request misses cache and re-
     // triggers the rate_limit + fallback cycle, burning cascade
     // quota for the whole rate-limit window.
+    // v2.0.91 — kimi-k2 upstream outage. Cascade returns idle_empty
+    // (null content, ~1-6 tokens). Return clear error with alternatives.
+    if (/^kimi/i.test(String(modelKey || ''))
+        && !toolCalls.length
+        && (!allText || allText.trim().length === 0)
+        && (!allThinking || allThinking.trim().length === 0)) {
+      return {
+        status: 502,
+        body: {
+          error: {
+            message: `${model} 在 Cascade 上游当前不可用（返回空响应）。请换用 claude-sonnet-4.6、gemini-2.5-flash 或 glm-4.7。`,
+            type: 'upstream_model_unavailable',
+          },
+        },
+      };
+    }
+
     if (ckey && !toolCalls.length) {
       cacheSet(ckey, { text: allText, thinking: allThinking });
       if (aliasCkey && aliasCkey !== ckey) {
@@ -3154,6 +3185,11 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
                 historyCoverage: cascadeResult.historyCoverage || reuseEntry?.historyCoverage || null,
                 createdAt: reuseEntry?.createdAt,
               }, callerKey, ttlHint === undefined ? 0 : ttlHint);
+
+              // Bind caller to this account for the next turn
+              if (callerKey && isStickyEnabled() && acct) {
+                setStickyBinding(callerKey, modelKey, acct.id, acct.apiKey);
+              }
             }
             // success
             if (hadSuccess) reportSuccess(currentApiKey);

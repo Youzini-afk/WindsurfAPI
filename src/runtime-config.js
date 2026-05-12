@@ -300,4 +300,3 @@ import('./auth.js').then(m => {
     m.setDroughtRestrictResolver(() => isExperimentalEnabled('droughtRestrictPremium'));
   }
 }).catch(() => { /* auth not yet ready, validateApiKey falls back to env */ });
-

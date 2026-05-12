@@ -1310,6 +1310,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
           if (binding) {
               setAccountProxy(binding.accountId, binding.proxy);
               result.proxy = proxy;
+              ensureLsForAccount(binding.accountId).catch(() => {});
           }
           if (!result.proxy && loginProxy?.host) result.proxy = loginProxy;
           results.push(result);

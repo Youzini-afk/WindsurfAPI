@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { config } from '../src/config.js';
 import { configureBindHost } from '../src/auth.js';
 import { handleDashboardApi, runGit, setGitExecFileForTest } from '../src/dashboard/api.js';
+import { setRuntimeApiKey, setRuntimeDashboardPassword } from '../src/runtime-config.js';
 
 const originalDashboardPassword = config.dashboardPassword;
 const originalApiKey = config.apiKey;
@@ -13,6 +14,8 @@ let tempDir = null;
 
 afterEach(() => {
   setGitExecFileForTest(null);
+  setRuntimeApiKey('');
+  setRuntimeDashboardPassword('');
   config.dashboardPassword = originalDashboardPassword;
   config.apiKey = originalApiKey;
   configureBindHost('0.0.0.0');
@@ -77,6 +80,8 @@ describe('Docker self-update unavailable state', () => {
   });
 
   it('returns 200 available:false from /self-update/check when git is unavailable', async () => {
+    setRuntimeApiKey('');
+    setRuntimeDashboardPassword('');
     config.dashboardPassword = '';
     config.apiKey = '';
     configureBindHost('127.0.0.1');
