@@ -1,9 +1,10 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { config } from '../src/config.js';
-import { configureBindHost, getAccountList, removeAccount } from '../src/auth.js';
+import { configureBindHost, getAccountList, removeAccount, _resetLockoutForTests } from '../src/auth.js';
 import { handleDashboardApi } from '../src/dashboard/api.js';
 import { getEffectiveProxy, removeProxy } from '../src/dashboard/proxy-config.js';
+import { setRuntimeApiKey, setRuntimeDashboardPassword } from '../src/runtime-config.js';
 
 const originalAllowPrivate = config.allowPrivateProxyHosts;
 const originalDashboardPassword = config.dashboardPassword;
@@ -25,6 +26,9 @@ function snapshotAccountIds() {
 }
 
 afterEach(() => {
+  _resetLockoutForTests();
+  setRuntimeApiKey('');
+  setRuntimeDashboardPassword('');
   config.allowPrivateProxyHosts = originalAllowPrivate;
   config.dashboardPassword = originalDashboardPassword;
   config.apiKey = originalApiKey;
@@ -42,6 +46,9 @@ afterEach(() => {
 
 describe('POST /accounts proxy ordering (regression for PR #90 follow-up)', () => {
   it('does NOT create account when proxy format is invalid', async () => {
+    _resetLockoutForTests();
+    setRuntimeApiKey('');
+    setRuntimeDashboardPassword('');
     config.dashboardPassword = '';
     config.apiKey = '';
     configureBindHost('127.0.0.1');
@@ -63,6 +70,9 @@ describe('POST /accounts proxy ordering (regression for PR #90 follow-up)', () =
   });
 
   it('does NOT create account when proxy host is private and ALLOW_PRIVATE_PROXY_HOSTS is off', async () => {
+    _resetLockoutForTests();
+    setRuntimeApiKey('');
+    setRuntimeDashboardPassword('');
     config.dashboardPassword = '';
     config.apiKey = '';
     config.allowPrivateProxyHosts = false;
@@ -85,6 +95,9 @@ describe('POST /accounts proxy ordering (regression for PR #90 follow-up)', () =
   });
 
   it('creates account with valid public proxy and binds account-level proxy', async () => {
+    _resetLockoutForTests();
+    setRuntimeApiKey('');
+    setRuntimeDashboardPassword('');
     config.dashboardPassword = '';
     config.apiKey = '';
     configureBindHost('127.0.0.1');
@@ -120,6 +133,9 @@ describe('POST /accounts proxy ordering (regression for PR #90 follow-up)', () =
   });
 
   it('prefers api_key when api_key + token are both provided', async () => {
+    _resetLockoutForTests();
+    setRuntimeApiKey('');
+    setRuntimeDashboardPassword('');
     config.dashboardPassword = '';
     config.apiKey = '';
     configureBindHost('127.0.0.1');
@@ -148,6 +164,9 @@ describe('POST /accounts proxy ordering (regression for PR #90 follow-up)', () =
   });
 
   it('returns non-ERR_* proxy validation errors when host validation throws generic errors', async () => {
+    _resetLockoutForTests();
+    setRuntimeApiKey('');
+    setRuntimeDashboardPassword('');
     config.dashboardPassword = '';
     config.apiKey = '';
     configureBindHost('127.0.0.1');
@@ -172,6 +191,9 @@ describe('POST /accounts proxy ordering (regression for PR #90 follow-up)', () =
   });
 
   it('rejects request with no api_key/token before doing any work', async () => {
+    _resetLockoutForTests();
+    setRuntimeApiKey('');
+    setRuntimeDashboardPassword('');
     config.dashboardPassword = '';
     config.apiKey = '';
     configureBindHost('127.0.0.1');
@@ -193,6 +215,9 @@ describe('POST /accounts proxy ordering (regression for PR #90 follow-up)', () =
   });
 
   it('creates account with no proxy when none provided', async () => {
+    _resetLockoutForTests();
+    setRuntimeApiKey('');
+    setRuntimeDashboardPassword('');
     config.dashboardPassword = '';
     config.apiKey = '';
     configureBindHost('127.0.0.1');
